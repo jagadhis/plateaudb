@@ -12,7 +12,9 @@
 // - It commits when it is inactive and has no request pending. When every pending request has no
 //   listener, the commit is sent with them, and the worker commits only if none of them failed.
 
+import { chooseBackend, chosenBackend, nativeIndexedDB, type Backend } from "./backend";
 import { dispatch, handlers, PlateauEvent, PlateauTarget, PlateauVersionChangeEvent } from "./events";
+import { instrumentOpen } from "./fallback";
 import {
   canInjectKey,
   cmp,
@@ -233,18 +235,90 @@ function finishRequest(req: PlateauRequest, result: unknown, error: DOMException
   req._error = error;
 }
 
+/** An open or deleteDatabase made before the backend was chosen, that ran on the browser's
+ * IndexedDB: it passes on the browser's request's events and state. */
+class BridgedRequest extends PlateauOpenDBRequest {
+  /** @internal */
+  parentTarget(): PlateauTarget | null {
+    return null;
+  }
+}
+
+function bridge(req: PlateauOpenDBRequest, nat: IDBOpenDBRequest): void {
+  const b = req as BridgedRequest;
+  Object.setPrototypeOf(b, BridgedRequest.prototype);
+  const settle = () => {
+    b._done = true;
+    b._result = nat.result;
+    b._error = nat.error;
+  };
+  nat.addEventListener("upgradeneeded", (e) => {
+    settle();
+    b.transaction = nat.transaction as unknown as PlateauTransaction;
+    const out = dispatch(b, new PlateauVersionChangeEvent("upgradeneeded", { oldVersion: e.oldVersion, newVersion: e.newVersion }));
+    // As natively: an exception in upgradeneeded aborts the upgrade.
+    if (out.threw) nat.transaction?.abort();
+  });
+  nat.addEventListener("blocked", (e) => {
+    dispatch(b, new PlateauVersionChangeEvent("blocked", { oldVersion: e.oldVersion, newVersion: e.newVersion }));
+  });
+  nat.addEventListener("success", (e) => {
+    settle();
+    b.transaction = null;
+    const v = e as IDBVersionChangeEvent;
+    dispatch(b, v.oldVersion === undefined ? new PlateauEvent("success") : new PlateauVersionChangeEvent("success", { oldVersion: v.oldVersion, newVersion: v.newVersion }));
+  });
+  nat.addEventListener("error", () => {
+    settle();
+    b.transaction = null;
+    dispatch(b, new PlateauEvent("error", { bubbles: true, cancelable: true }));
+  });
+}
+
+function nativeOpen(name: string, version: number | undefined): IDBOpenDBRequest {
+  const r = version === undefined ? nativeIndexedDB!.open(name) : nativeIndexedDB!.open(name, version);
+  instrumentOpen(r);
+  return r;
+}
+
+let fallbackBudget: number | null = null;
+
 export class PlateauFactory {
+  /** Which backend runs this page's databases: `"opfs"` (plateau's engine) or `"indexeddb"` (the
+   * browser's own, where the engine cannot run); undefined until the first call that needs storage
+   * chooses it. It never changes after that. */
+  get backend(): Backend | undefined {
+    return chosenBackend();
+  }
+
+  /** Chooses the backend now if no call has yet, and resolves with it. */
+  chooseBackend(): Promise<Backend> {
+    return chooseBackend();
+  }
+
   open(name: string, version?: number): PlateauOpenDBRequest {
     const n = String(name);
     const v = toVersion(version);
+    const b = chosenBackend() ?? (void chooseBackend(), chosenBackend());
+    if (b === "indexeddb") return nativeOpen(n, v) as unknown as PlateauOpenDBRequest;
     const req = new PlateauOpenDBRequest();
-    enqueue(n, () => openDatabase(req, n, v));
+    if (b === "opfs") enqueue(n, () => openDatabase(req, n, v));
+    else void chooseBackend().then((b) => (b === "opfs" ? enqueue(n, () => openDatabase(req, n, v)) : bridge(req, nativeOpen(n, v))));
     return req;
   }
 
   deleteDatabase(name: string): PlateauOpenDBRequest {
     const n = String(name);
+    const b = chosenBackend() ?? (void chooseBackend(), chosenBackend());
+    if (b === "indexeddb") return nativeIndexedDB!.deleteDatabase(n) as unknown as PlateauOpenDBRequest;
     const req = new PlateauOpenDBRequest();
+    if (b === "opfs") this.deleteHere(req, n);
+    else void chooseBackend().then((b) => (b === "opfs" ? this.deleteHere(req, n) : bridge(req, nativeIndexedDB!.deleteDatabase(n))));
+    return req;
+  }
+
+  /** @internal */
+  private deleteHere(req: PlateauOpenDBRequest, n: string): void {
     enqueue(n, async () => {
       await new Promise<void>((r) => afterTask(r));
       await closeOthers(n, null, null, null, req);
@@ -259,14 +333,18 @@ export class PlateauFactory {
       finishRequest(req, undefined, null);
       dispatch(req, new PlateauVersionChangeEvent("success", { oldVersion: old, newVersion: null }));
     });
-    return req;
   }
 
   cmp(a: unknown, b: unknown): number {
     return cmp(a, b);
   }
 
+  /** On the IndexedDB fallback, the browser's list; plateau's engine does not list its databases yet
+   * and resolves with an empty list. */
   async databases(): Promise<{ name: string; version: number }[]> {
+    if ((await chooseBackend()) === "indexeddb" && typeof nativeIndexedDB!.databases === "function") {
+      return (await nativeIndexedDB!.databases()) as { name: string; version: number }[];
+    }
     return [];
   }
 
@@ -283,12 +361,18 @@ export class PlateauFactory {
    * less. */
   async setMemoryBudget(bytes: number | null): Promise<void> {
     if (bytes !== null && !(bytes > 0)) throw new TypeError("plateau: the memory budget must be a positive number of bytes, or null.");
+    if ((await chooseBackend()) === "indexeddb") {
+      fallbackBudget = bytes;
+      return;
+    }
     await runtime().call({ t: "budget", bytes });
   }
 
   /** plateau's own: the runtime's WASM memory (its peak: WASM memory never shrinks), the budget,
-   * the bytes loaded sections hold, and the file sizes of database `name` if it is open. */
-  memoryStats(name?: string): Promise<MemoryStats> {
+   * the bytes loaded sections hold, and the file sizes of database `name` if it is open. On the
+   * IndexedDB fallback there is no engine: zeros, and the budget last set. */
+  async memoryStats(name?: string): Promise<MemoryStats> {
+    if ((await chooseBackend()) === "indexeddb") return { wasmMemoryBytes: 0, budgetBytes: fallbackBudget ?? Infinity, cachedBytes: 0 };
     return runtime().call<MemoryStats>(name === undefined ? { t: "stats" } : { t: "stats", db: String(name) });
   }
 }

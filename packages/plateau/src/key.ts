@@ -353,6 +353,15 @@ export interface WireRange {
   hiOpen: boolean;
 }
 
+let nativeRanges = false;
+
+/** @internal From now on `PlateauKeyRange`'s factories return the browser's `IDBKeyRange`: the page
+ * runs on the browser's IndexedDB, which takes no other range. */
+export function useNativeKeyRanges(): void {
+  nativeRanges = typeof IDBKeyRange !== "undefined";
+}
+
+/** On the IndexedDB fallback, the factories return the browser's own `IDBKeyRange`. */
 export class PlateauKeyRange {
   /** @internal */ readonly lo: string | undefined;
   /** @internal */ readonly hi: string | undefined;
@@ -375,19 +384,23 @@ export class PlateauKeyRange {
   }
 
   static only(value: unknown): PlateauKeyRange {
+    if (nativeRanges) return IDBKeyRange.only(value) as unknown as PlateauKeyRange;
     const k = requireKey(value);
     return new PlateauKeyRange(k, k, false, false);
   }
 
   static lowerBound(lower: unknown, open = false): PlateauKeyRange {
+    if (nativeRanges) return IDBKeyRange.lowerBound(lower, open) as unknown as PlateauKeyRange;
     return new PlateauKeyRange(requireKey(lower), undefined, !!open, true);
   }
 
   static upperBound(upper: unknown, open = false): PlateauKeyRange {
+    if (nativeRanges) return IDBKeyRange.upperBound(upper, open) as unknown as PlateauKeyRange;
     return new PlateauKeyRange(undefined, requireKey(upper), true, !!open);
   }
 
   static bound(lower: unknown, upper: unknown, lowerOpen = false, upperOpen = false): PlateauKeyRange {
+    if (nativeRanges) return IDBKeyRange.bound(lower, upper, lowerOpen, upperOpen) as unknown as PlateauKeyRange;
     const lo = requireKey(lower);
     const hi = requireKey(upper);
     if (lo > hi || (lo === hi && (lowerOpen || upperOpen))) throw dataError("The lower key is greater than the upper key.");

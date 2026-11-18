@@ -16,6 +16,7 @@ import {
   assert_true,
   assert_unreached,
   done,
+  fallback_test,
   nextTask,
   openDb,
   plateau_test,
@@ -1433,7 +1434,8 @@ promise_test("cursor: long walks in both directions over an index, mixing contin
 });
 
 // plateau's additions: declared typed columns ("hybrid values") and store.query. These run only
-// against plateau; native IndexedDB has neither.
+// against plateau's API, on either backend (`engine`: plateau's engine only); native IndexedDB has
+// neither.
 
 async function typed(t: Parameters<Parameters<typeof promise_test>[1]>[0], env: Parameters<Parameters<typeof promise_test>[1]>[1]) {
   return openDb(t, env, (db) => {
@@ -1466,7 +1468,7 @@ plateau_test("typed store: a declared field of the wrong type throws DataError",
   assert_throws_dom("DataError", () => s.put({ id: "1", team: 1, labels: [], updated: 1, title: "x" }));
   assert_throws_dom("DataError", () => s.put({ id: 1, team: 1, labels: [], updated: 1 }));
   assert_throws_dom("DataError", () => s.put(new Map()));
-});
+}, { engine: true });
 
 plateau_test("typed store: query with where, orderBy and limit, and count", async (t, env) => {
   const db = await typed(t, env);
@@ -1476,6 +1478,27 @@ plateau_test("typed store: query with where, orderBy and limit, and count", asyn
   assert_same(rows.map((x) => x.id), [2, 5, 8]);
   assert_true(typeof r.plan === "string" && r.plan.length > 0, "plan reported");
   assert_equals(await req(s.query({ where: [{ field: "labels", op: "eq", value: 0 }], count: true })), 6);
+});
+
+// Runs on both backends, so the fallback's query keeps the engine's answers: filters on a list
+// column, fractional bounds on an integer column, and ties broken by primary key in both orders.
+plateau_test("typed store: query filters (eq, in, range, a list column), orders with ties by primary key, limits and counts", async (t, env) => {
+  const db = await openDb(t, env, (db) => {
+    const s = db.createObjectStore("q", {
+      keyPath: "id",
+      columns: { id: "f64", team: { kind: "u32", index: "bitmap" }, labels: { kind: "u32_multi", index: "bitmap" }, score: { kind: "f64", index: "ordered" }, title: "str" },
+    } as IDBObjectStoreParameters);
+    for (let i = 1; i <= 24; i++) s.put({ id: i, team: i % 4, labels: [i % 3, 3 + (i % 5)], score: i % 6, title: `t${i}` });
+  });
+  const s = db.transaction("q").objectStore("q") as unknown as { query(q: unknown): IDBRequest };
+  const ids = async (q: unknown) => (await req<{ id: number }[]>(s.query(q))).map((r) => r.id);
+  assert_same(await ids({ where: [{ field: "team", op: "in", values: [1, 3] }], orderBy: { field: "score", desc: true }, limit: 5 }), [23, 17, 11, 5, 21], "in, desc, ties by primary key descending");
+  assert_same(await ids({ where: [{ field: "score", op: "range", gte: 2, lt: 4 }, { field: "labels", op: "eq", value: 0 }] }), [3, 9, 15, 21], "range and a list column, primary key order");
+  assert_same(await ids({ orderBy: { field: "score" }, limit: 7 }), [6, 12, 18, 24, 1, 7, 13], "asc, ties by primary key ascending");
+  assert_same(await ids({ where: [{ field: "labels", op: "eq", value: 5 }], orderBy: { field: "score", desc: true } }), [17, 22, 2, 7, 12], "a list column, desc");
+  assert_same(await ids({ where: [{ field: "score", op: "eq", value: 0 }], orderBy: { field: "team", desc: true } }), [18, 6, 24, 12], "order by an integer column");
+  assert_same(await ids({ where: [{ field: "team", op: "eq", value: 2.5 }] }), [], "a fraction never equals an integer column");
+  assert_equals(await req(s.query({ where: [{ field: "score", op: "range", gt: 1.5, lte: 4 }, { field: "labels", op: "in", values: [4, 6] }], count: true })), 4);
 });
 
 plateau_test("typed store: writes, an IndexedDB index and a cursor agree with query after an abort", async (t, env) => {
@@ -1564,7 +1587,7 @@ plateau_test("compact: drops deleted and replaced rows, keeps every answer, and 
   const db2 = await req<IDBDatabase>(env.factory.open(db.name));
   t.add_cleanup(() => db2.close());
   assert_equals(await req(db2.transaction("issues").objectStore("issues").count()), 30 + 3 * 20);
-});
+}, { engine: true });
 
 plateau_test("memory budget: a tiny budget drops loaded sections and every answer stays the same", async (t, env) => {
   const factory = env.factory as unknown as PlateauExtras;
@@ -1594,4 +1617,31 @@ plateau_test("memory budget: a tiny budget drops loaded sections and every answe
   await factory.setMemoryBudget(null);
   assert_equals((await factory.memoryStats()).budgetBytes, Infinity);
   assert_equals(await read(), want);
+}, { engine: true });
+
+// The IndexedDB fallback: plateau's own calls run, on the browser's objects.
+
+fallback_test("fallback: backend is indexeddb, plateau's own calls do not throw, and observe sees this tab's commit", async (t, env) => {
+  const factory = env.factory as unknown as PlateauExtras & { backend?: string };
+  assert_equals(factory.backend, "indexeddb");
+  const db = await openDb(t, env, (db) => {
+    db.createObjectStore("s");
+    db.createObjectStore("u");
+  });
+  const calls: string[][] = [];
+  const stop = (db as unknown as { observe(s: string, cb: (c: { stores: string[] }) => void): () => void }).observe("s", (c) => calls.push(c.stores));
+  let tx = db.transaction(["s", "u"], "readwrite");
+  tx.objectStore("u").put(1, 1);
+  await done(tx);
+  tx = db.transaction(["s", "u"], "readwrite");
+  tx.objectStore("s").put(1, 1);
+  await done(tx);
+  assert_same(calls, [["s"]], "one call, for the observed store only");
+  stop();
+  await (db as unknown as { compact(): Promise<void> }).compact();
+  await factory.setMemoryBudget(1 << 20);
+  const stats = await factory.memoryStats(db.name);
+  assert_equals(stats.budgetBytes, 1 << 20);
+  await factory.setMemoryBudget(null);
+  assert_true(db instanceof IDBDatabase, "the connection is the browser's own");
 });

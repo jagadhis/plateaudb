@@ -6,7 +6,7 @@ It keeps a compressed bitmap of row ids for each value of a field you declare, s
 filters on several fields (`team = 7 AND state IN (1, 2) ORDER BY updatedAt DESC LIMIT 50`) costs
 roughly the size of its result, not the size of the table.
 
-Status: 0.1.0, pre-1.0. Read [Known limits](#known-limits) before you put data in it that you
+Status: 0.2.0, pre-1.0. Read [Known limits](#known-limits) before you put data in it that you
 cannot rebuild.
 
 ## Install
@@ -131,6 +131,49 @@ await plateau.whenLeader();   // resolves when this tab is the leader, e.g. to h
 const stop = db.observe("orders", ({ stores }) => render()); // after a commit in any tab
 ```
 
+## Where plateau cannot run: the IndexedDB fallback
+
+Where the engine cannot run, `plateau` hands every call to the browser's own `indexedDB`, so code
+written against it keeps working. It falls back when the browser has no OPFS
+(`navigator.storage.getDirectory`), no `Worker` or no WebAssembly, or when the worker cannot start
+the engine or open an OPFS sync access handle: a WebKit ephemeral session (Playwright's default
+context) fails there with `UnknownError`, as do browsers without module workers,
+`FileSystemSyncAccessHandle` or WebAssembly SIMD.
+
+The backend is chosen once per page, at the first call that needs storage (`open`,
+`deleteDatabase`, `databases`, `setMemoryBudget`, `memoryStats`), and never changes after that.
+`open` still returns its request at once; the request fires its events when the choice is made.
+
+```js
+plateau.backend;                         // "opfs" or "indexeddb"; undefined before the choice
+const backend = await plateau.chooseBackend(); // chooses now if no call has yet
+```
+
+To skip the check, start the runtime before the first call with the backend you want:
+`startRuntime({ backend: "indexeddb" })` (always the browser's IndexedDB) or
+`startRuntime({ backend: "opfs" })` (never fall back; opening fails where OPFS does). Every tab of
+the origin should ask for the same one.
+
+On the fallback:
+
+- **Data is separate.** What one backend wrote is not visible on the other. A browser that gains
+  OPFS support later starts on an empty plateau database; the old data stays in its IndexedDB.
+- The objects are the browser's own (`IDBDatabase`, `IDBObjectStore`, ...), with plateau's calls
+  added to them. `PlateauKeyRange` returns the browser's `IDBKeyRange`; create key ranges after the
+  first `open`, since a range made before the backend is chosen is plateau's own and the browser
+  does not take it.
+- `createObjectStore(name, { columns })` works; the browser ignores `columns`, so a field of the
+  wrong kind is stored instead of throwing `DataError`.
+- `store.query` returns what plateau's engine returns for the same records, read from the store
+  (an `eq` filter on a field with a `multiEntry` index reads only that index's records), so it
+  costs the size of the store, not of the result. It also runs on stores without `columns`;
+  `request.plan` is `scan` or `index:<name>`.
+- `db.observe` calls back in every tab after a readwrite transaction that opened one of the
+  observed stores commits, whether or not it wrote to it.
+- `db.compact()` and `plateau.setMemoryBudget()` do nothing; `plateau.memoryStats()` reports zeros
+  and the budget last set. `plateau.whenLeader()` works as on OPFS.
+- `plateau.databases()` returns the browser's list.
+
 ## Memory budget
 
 The worker keeps the parts of each file it has read in memory up to a budget, and drops the least
@@ -153,21 +196,28 @@ so `memoryStats` reports the peak.
 Measured with Playwright on macOS: Chromium 158 and WebKit 27.2. Firefox is not measured
 (Playwright's Firefox did not launch on the test machine), so treat it as unknown.
 
-plateau needs OPFS with `FileSystemSyncAccessHandle` in a dedicated worker, module workers, and
-WebAssembly SIMD (Chrome 91+, Safari 16.4+, Firefox 89+ ship SIMD).
+plateau's engine needs OPFS with `FileSystemSyncAccessHandle` in a dedicated worker, module
+workers, and WebAssembly SIMD (Chrome 91+, Safari 16.4+, Firefox 89+ ship SIMD). Elsewhere it runs
+on the browser's IndexedDB (see [the fallback](#where-plateau-cannot-run-the-indexeddb-fallback)).
 
-In a WebKit ephemeral session (Playwright's default, non-persistent context) opening a database
-fails with `UnknownError`; with a persistent profile it works. Private browsing modes are not
-measured.
+In a WebKit ephemeral session (Playwright's default, non-persistent context) OPFS is not available,
+so plateau runs on the fallback; with a persistent profile it runs on OPFS. Measured with
+Playwright: on the fallback, 85 of 85 conformance tests pass in Chromium and WebKit, with OPFS,
+`Worker` or WebAssembly removed, the WASM failing to compile, the worker failing to load, and in a
+WebKit ephemeral context. Private browsing modes are not measured.
 
 ## Known limits
 
-- **Conformance: 84 of 85** WPT-style IndexedDB tests pass in Chromium and WebKit, against 85 of
-  85 for native IndexedDB. The one difference: a key stored as `-0` comes back as `0`.
-- **No fallback to native IndexedDB.** Where OPFS or its sync access handle is missing, plateau
-  does not switch to `window.indexedDB` for you.
+- **Conformance: 84 of 85** WPT-style IndexedDB tests pass in Chromium and WebKit on OPFS, against
+  85 of 85 for native IndexedDB. The one difference: a key stored as `-0` comes back as `0`. On the
+  IndexedDB fallback all 85 pass.
+- **The fallback's data is separate** from OPFS data, and its `store.query` scans the store (see
+  [the fallback](#where-plateau-cannot-run-the-indexeddb-fallback)).
+- **First open:** the page's first call waits for the worker to check that it can open an OPFS
+  file before the database opens: about 1 ms more to the first open on a fresh page (medians of
+  10 page loads: Chromium 10.2 ms against 9.6 ms without the check, WebKit 15.0 ms against 14.0 ms).
 - **Values:** `Blob`, `File`, `ImageData` and `Error` values throw `DataCloneError`.
-- `plateau.databases()` returns an empty list.
+- `plateau.databases()` returns an empty list on OPFS.
 - **Start-up:** the first query on a fresh page load costs more than native IndexedDB, because the
   worker starts and the WASM compiles (measured through the API at 1M rows in Chromium: 8-13 ms
   against native 4-5 ms). Reopening and warm queries are faster than native.

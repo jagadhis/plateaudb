@@ -3,7 +3,8 @@
 // file runs on both.
 
 export interface Env {
-  impl: "native" | "plateau";
+  /** `fallback`: plateau's API on the browser's IndexedDB (plateau's backend `indexeddb`). */
+  impl: "native" | "plateau" | "fallback";
   factory: IDBFactory;
   KeyRange: typeof IDBKeyRange;
 }
@@ -17,8 +18,11 @@ export interface TestContext {
 
 export interface Result {
   name: string;
-  /** `plateau`: a test of plateau's own additions (typed columns, query), run only on plateau. */
-  scope: "shared" | "plateau";
+  /** `plateau`: a test of plateau's own additions (typed columns, query), run on plateau's API on
+   * either backend; `engine`: one of them that needs plateau's engine (declared column checks,
+   * compaction, the memory budget), not run on the fallback; `fallback`: run only on the
+   * fallback. */
+  scope: "shared" | "plateau" | "engine" | "fallback";
   status: "pass" | "fail";
   message?: string;
   ms: number;
@@ -32,9 +36,15 @@ export function promise_test(name: string, body: Body): void {
   tests.push({ name, body, scope: "shared" });
 }
 
-/** A test of plateau's additions to the API; native IndexedDB does not have them. */
-export function plateau_test(name: string, body: Body): void {
-  tests.push({ name, body, scope: "plateau" });
+/** A test of plateau's additions to the API; native IndexedDB does not have them. With `engine`,
+ * one that needs plateau's engine, which the IndexedDB fallback does not run. */
+export function plateau_test(name: string, body: Body, o: { engine?: boolean } = {}): void {
+  tests.push({ name, body, scope: o.engine ? "engine" : "plateau" });
+}
+
+/** A test of plateau's API on the IndexedDB fallback only. */
+export function fallback_test(name: string, body: Body): void {
+  tests.push({ name, body, scope: "fallback" });
 }
 
 export class AssertionError extends Error {}
@@ -181,7 +191,9 @@ export async function run(env: Env, filter?: string): Promise<Result[]> {
   const stamp = Date.now().toString(36);
   for (const { name, body, scope } of tests) {
     if (filter && !name.includes(filter)) continue;
-    if (scope === "plateau" && env.impl !== "plateau") continue;
+    if (scope === "plateau" && env.impl === "native") continue;
+    if (scope === "engine" && env.impl !== "plateau") continue;
+    if (scope === "fallback" && env.impl !== "fallback") continue;
     const cleanups: (() => unknown)[] = [];
     const t: TestContext = {
       name,

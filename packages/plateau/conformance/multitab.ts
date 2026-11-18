@@ -1,10 +1,11 @@
 // Multi-tab tests: several pages of one origin in one browser context, each driving the same
-// database, run against native IndexedDB and plateau's API in Chromium and WebKit (headless,
-// Playwright, persistent profiles). Shared tests must pass on both; plateau-only tests check what
-// native IndexedDB does not have: leader failover.
+// database, run against native IndexedDB, plateau's API and plateau's API forced onto the
+// browser's IndexedDB (`fallback`) in Chromium and WebKit (headless, Playwright, persistent
+// profiles). Shared tests must pass on all three; plateau-only tests check what native IndexedDB
+// does not have: leader failover, whenLeader and observe.
 //
 //   bun conformance/multitab.ts [--browsers chromium,webkit] [--filter text] [--json out.json]
-// Exits non-zero if a test fails on plateau or a shared test's outcome differs from native.
+// Exits non-zero if a test fails on plateau's API or a shared test's outcome differs from native.
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,7 +24,7 @@ const filter = arg("filter", "");
 const jsonOut = arg("json", "");
 const types: Record<string, BrowserType> = { chromium, webkit };
 
-type Impl = "native" | "plateau";
+type Impl = "native" | "plateau" | "fallback";
 
 interface Ctx {
   browser: string;
@@ -315,14 +316,14 @@ const stamp = Date.now().toString(36);
 let counter = 0;
 for (const b of browsers) {
   report[b] = {};
-  for (const impl of ["native", "plateau"] as Impl[]) {
+  for (const impl of ["native", "plateau", "fallback"] as Impl[]) {
     const results: Result[] = [];
     const profile = await mkdtemp(join(tmpdir(), "plateau-multitab-"));
     const ctx = await types[b].launchPersistentContext(profile, { headless: true });
     const errors: string[] = [];
     for (const { name, scope, body } of tests) {
       if (filter && !name.includes(filter)) continue;
-      if (scope === "plateau" && impl !== "plateau") continue;
+      if (scope === "plateau" && impl === "native") continue;
       const opened: Page[] = [];
       const t: Ctx = {
         browser: b,
@@ -337,7 +338,7 @@ for (const b of browsers) {
             p.on("pageerror", (e) => errors.push(e.message));
             await p.goto(`${url}?impl=${impl}`);
             await p.waitForFunction(() => document.getElementById("status")?.textContent === "ready");
-            if (impl === "plateau") await p.waitForFunction(() => window.tab.role() !== "pending");
+            if (impl !== "native") await p.waitForFunction(() => window.tab.role() !== "pending");
             out.push(p);
             opened.push(p);
           }
@@ -370,11 +371,13 @@ for (const b of browsers) {
     if (errors.length && process.env.VERBOSE) console.log(`    page errors:\n      ${errors.join("\n      ")}`);
   }
   const native = new Map((report[b].native ?? []).map((r) => [r.name, r.status]));
-  for (const r of report[b].plateau ?? []) {
-    if (r.status !== "pass") bad = true;
-    if (r.scope === "shared" && native.get(r.name) !== r.status) {
-      console.log(`[${b}] DIFFERS: ${r.name}: native ${native.get(r.name)}, plateau ${r.status}`);
-      bad = true;
+  for (const impl of ["plateau", "fallback"]) {
+    for (const r of report[b][impl] ?? []) {
+      if (r.status !== "pass") bad = true;
+      if (r.scope === "shared" && native.get(r.name) !== r.status) {
+        console.log(`[${b}] DIFFERS: ${r.name}: native ${native.get(r.name)}, ${impl} ${r.status}`);
+        bad = true;
+      }
     }
   }
 }

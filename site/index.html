@@ -65,13 +65,13 @@
             <li>Put, delete and compaction, crash-safe: a crash test over 1,410 tear points passes.</li>
             <li>Memory budget with eviction: default 64 MiB, 24 MiB on low-memory devices.</li>
             <li>No special server headers (no COOP/COEP); the worker and WASM start themselves.</li>
+            <li>From 0.2.0: where OPFS, module workers or WebAssembly are missing, or in a WebKit ephemeral session, it runs on the browser's own IndexedDB (85 of 85 conformance tests), and <code>plateau.backend</code> says which one runs.</li>
             <li>Several tabs at once: one tab runs the worker, the others forward to it; when that tab closes another takes over within about 15 ms, and no committed write is lost. <code>versionchange</code> and <code>blocked</code> reach every tab as natively.</li>
           </ul>
         </div>
         <div class="card">
           <h3><span class="dot dot-warn"></span>Not yet</h3>
           <ul>
-                        <li>No fallback to native IndexedDB where OPFS is missing.</li>
             <li>Blob, File, ImageData and Error values throw <code>DataCloneError</code>.</li>
             <li>A fresh page load through the API is about 2x slower than native IndexedDB (6-10 ms against 3-5 ms).</li>
             <li>Firefox is not measured: Playwright's Firefox does not launch on the test Mac.</li>

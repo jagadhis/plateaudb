@@ -16,6 +16,9 @@
 //   UnknownError; what they committed is on disk. Each tab reopens its connections at the new
 //   leader and sends again the calls it had waiting.
 // Without Web Locks or BroadcastChannel the tab runs its own worker, as a single tab does.
+// - A tab that does not run the engine (`stop`: the page falls back to the browser's IndexedDB)
+//   still takes part in the election, for `whenLeader`, and fails the calls of tabs it leads, so
+//   they fall back too.
 
 import type { CallMessage, CallReply, CallRequest, TxMessage, TxReply } from "./protocol";
 import { scheduler, type Schedulable } from "./scheduler";
@@ -32,6 +35,9 @@ export interface RuntimeOptions {
   worker?: Worker;
   /** Resolves when that worker has its WASM (it replied to `init`). */
   initialized?: Promise<unknown>;
+  /** Which backend this page uses: `auto` (the default) picks OPFS where the engine runs there and
+   * the browser's own IndexedDB elsewhere; `opfs` and `indexeddb` skip the check. */
+  backend?: "auto" | "opfs" | "indexeddb";
 }
 
 /** Once versionchange has fired at a tab's connections: whether one is still open without a close
@@ -213,7 +219,14 @@ export class Runtime {
   readonly tab: string;
   /** Resolves when this tab becomes the leader (at once for a single tab); never rejects. */
   readonly leading: Promise<void>;
+  /** The backend the page asked for (`startRuntime({ backend })`). */
+  readonly requested: "auto" | "opfs" | "indexeddb";
+  /** Set when this tab cannot run the engine (its worker failed to start, or the page uses the
+   * browser's IndexedDB): calls fail with it, here and from the tabs this one leads. */
+  dead: DOMException | null = null;
   private becameLeader!: () => void;
+  /** Whether the worker answered `init` (or was handed over started). */
+  private started = false;
 
   private calls = new Map<number, Call>();
   private nextCall = 1;
@@ -248,9 +261,11 @@ export class Runtime {
   constructor(o: RuntimeOptions = {}) {
     this.leading = new Promise<void>((resolve) => (this.becameLeader = resolve));
     this.tab = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    this.requested = o.backend ?? "auto";
     // The worker starts at once, as if this tab will lead: a single tab, the common case, then
     // waits for nothing. A follower stops it once a leader answers.
-    this.startWorker(o);
+    if (this.requested === "indexeddb") this.stop("plateau: this page uses the browser's IndexedDB");
+    else this.startWorker(o);
     const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
     if (!locks || typeof BroadcastChannel === "undefined") {
       this.lead();
@@ -274,6 +289,24 @@ export class Runtime {
       });
       return forever();
     });
+  }
+
+  /** This tab does not run the engine: stops its worker; calls fail from now on, and a tab this one
+   * leads gets the same failure, so it picks the same backend. */
+  stop(message: string): void {
+    if (this.dead) return;
+    this.dead = new DOMException(message, "NotSupportedError");
+    this.worker?.terminate();
+    this.worker = null;
+    if (this.role !== "leader") return;
+    for (const [id, c] of this.calls) {
+      this.calls.delete(id);
+      c.reject(this.dead);
+    }
+    for (const [id, reply] of this.relayed) {
+      this.relayed.delete(id);
+      reply({ t: "call", id, ok: false, name: this.dead.name, message: this.dead.message });
+    }
   }
 
   call<T>(m: CallRequest): Promise<T> {
@@ -344,14 +377,33 @@ export class Runtime {
   }
 
   private startWorker(o: RuntimeOptions): void {
-    const worker = o.worker ?? new Worker(new URL("./host.worker.ts", import.meta.url), { type: "module" });
-    if (!o.worker) {
-      const compiled = WebAssembly.compileStreaming(fetch(WASM_URL)).catch(async () => WebAssembly.compile(await (await fetch(WASM_URL)).arrayBuffer()));
-      void compiled.then((module) => worker.postMessage({ t: "init", module }));
+    let worker: Worker;
+    try {
+      worker = o.worker ?? new Worker(new URL("./host.worker.ts", import.meta.url), { type: "module" });
+      if (!o.worker) {
+        const compiled = WebAssembly.compileStreaming(fetch(WASM_URL)).catch(async () => WebAssembly.compile(await (await fetch(WASM_URL)).arrayBuffer()));
+        compiled.then(
+          (module) => worker.postMessage({ t: "init", module }),
+          (e) => this.stop(`plateau: the engine's WebAssembly does not compile here: ${(e as Error)?.message ?? String(e)}`),
+        );
+      }
+    } catch (e) {
+      // No Worker, no module workers or no WebAssembly.
+      this.stop(`plateau: the engine's worker does not start here: ${(e as Error)?.message ?? String(e)}`);
+      return;
     }
+    this.started = !!o.worker;
+    // Before `init` an error event means the worker's script did not load (say a browser without
+    // module workers); after it, errors are the worker's own and it keeps running.
+    worker.addEventListener("error", (e) => {
+      if (!this.started && this.worker === worker) this.stop(`plateau: the engine's worker failed to load: ${e.message ?? ""}`.trim());
+    });
     worker.addEventListener("message", (e: MessageEvent) => {
-      const m = e.data as CallReply | TxReply | { t: "init" };
-      if (m.t === "call") {
+      const m = e.data as CallReply | TxReply | { t: "init"; error?: string };
+      if (m.t === "init") {
+        if (m.error) this.stop(m.error);
+        else this.started = true;
+      } else if (m.t === "call") {
         const r = this.relayed.get(m.id);
         if (r) {
           this.relayed.delete(m.id);
@@ -363,7 +415,11 @@ export class Runtime {
   }
 
   private send(m: Outgoing, transfer: Transferable[] = []): void {
-    if (this.role === "leader") {
+    if (this.role === "leader" && this.dead) {
+      const dead = this.dead;
+      if (m.t !== "tx") queueMicrotask(() => this.settle({ t: "call", id: m.id, ok: false, name: dead.name, message: dead.message }));
+      else if (m.begin) queueMicrotask(() => this.txs.get(m.tx)?._onReply({ t: "tx", tx: m.tx, res: [], errs: [], end: { ok: false, name: "UnknownError", message: dead.message } }));
+    } else if (this.role === "leader") {
       this.worker!.postMessage(m, transfer);
     } else if (this.role === "follower") {
       if (m.t === "tx") {
@@ -427,7 +483,7 @@ export class Runtime {
     this.leaderTab = this.tab;
     this.role = "leader";
     this.becameLeader();
-    if (!this.worker) this.startWorker({});
+    if (!this.worker && !this.dead) this.startWorker({});
     this.hub?.postMessage({ t: "leader", tab: this.tab } satisfies Announcement);
     this.flush();
   }
@@ -573,6 +629,10 @@ export class Runtime {
   private relayCall(from: string, m: CallMessage): void {
     const f = this.followers.get(from);
     if (!f) return;
+    if (this.dead) {
+      f.port.postMessage({ t: "call", id: m.id, ok: false, name: this.dead.name, message: this.dead.message } satisfies CallReply);
+      return;
+    }
     const id = this.nextCall++;
     if (m.t === "close") count(f.conns, m.db, -1);
     this.relayed.set(id, (r) => {
@@ -588,6 +648,10 @@ export class Runtime {
   private relayTx(from: string, m: TxMessage): void {
     const f = this.followers.get(from);
     if (!f) return;
+    if (this.dead) {
+      if (m.begin) f.port.postMessage({ t: "tx", tx: m.tx, res: [], errs: [], end: { ok: false, name: "UnknownError", message: this.dead.message } } satisfies TxReply);
+      return;
+    }
     let p = f.txs.get(m.tx);
     if (!p) {
       if (!m.begin) return;
@@ -647,7 +711,7 @@ export class Runtime {
     this.followers.delete(tab);
     f.port.close();
     for (const p of [...f.txs.values()]) p.kill();
-    for (const [db, n] of f.conns) for (let i = 0; i < n; i++) this.worker!.postMessage({ t: "close", db, id: this.nextCall++ } satisfies CallMessage);
+    for (const [db, n] of f.conns) for (let i = 0; i < n; i++) this.worker?.postMessage({ t: "close", db, id: this.nextCall++ } satisfies CallMessage);
     for (const [key, release] of this.slotHolds) {
       if (!key.startsWith(`${tab}:`)) continue;
       this.slotHolds.delete(key);
@@ -663,6 +727,11 @@ export class Runtime {
 }
 
 let current: Runtime | null = null;
+
+/** The page's runtime if it has started. */
+export function currentRuntime(): Runtime | null {
+  return current;
+}
 
 /** The page's runtime, started on first call. */
 export function runtime(o?: RuntimeOptions): Runtime {

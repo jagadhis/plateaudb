@@ -1,0 +1,20 @@
+# Rust
+target/
+crates/engine/pkg/
+
+# JS
+node_modules/
+dist/
+packages/bench/dist/
+*.tsbuildinfo
+
+# Benchmark scratch (results/*.json and results/index.html are committed)
+.bench-profiles/
+results/raw/
+test-results/
+playwright-report/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

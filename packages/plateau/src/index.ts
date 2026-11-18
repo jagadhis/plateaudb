@@ -4,3 +4,4 @@ export { PlateauEvent, PlateauVersionChangeEvent } from "./events";
 export { startRuntime, runtime, type RuntimeOptions } from "./runtime";
 export { encodeValue, decodeValue } from "./value";
 export type { ColumnDecl, ColumnKind, MemoryStats } from "./protocol";
+export type { Backend } from "./backend";

@@ -11,7 +11,9 @@ result rather than the size of the table.
 ## Package
 
 The library is on npm as [`plateaudb`](packages/plateau) (`npm install plateaudb`); its README
-covers usage, browser support and known limits. The source is `packages/plateau`, built with
+covers usage, browser support and known limits. Where OPFS, module workers or WebAssembly are
+missing (or in a WebKit ephemeral session), it runs on the browser's own IndexedDB instead, and
+`plateau.backend` says which one runs. The source is `packages/plateau`, built with
 `bun run build` there.
 
 ## Website

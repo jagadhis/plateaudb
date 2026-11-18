@@ -42,7 +42,12 @@ interface SyncAccessHandle {
 
 let memory: WebAssembly.Memory | null = null;
 let markReady = () => {};
-const wasmReady = new Promise<void>((resolve) => (markReady = resolve));
+let markFailed: (e: Error) => void = () => {};
+const wasmReady = new Promise<void>((resolve, reject) => {
+  markReady = resolve;
+  markFailed = reject;
+});
+wasmReady.catch(() => {});
 const encoder = new TextEncoder();
 
 class IdbError extends Error {
@@ -1067,8 +1072,29 @@ async function host(name: string): Promise<DatabaseHost> {
   return h;
 }
 
+let probed: Promise<void> | null = null;
+
+/** Whether this worker can run the engine on OPFS: the WASM started, and a sync access handle on
+ * a file in plateau's directory opens. Fails in a WebKit ephemeral session (getDirectory throws
+ * UnknownError) and where FileSystemSyncAccessHandle is missing. */
+function probe(): Promise<void> {
+  probed ??= (async () => {
+    await wasmReady;
+    try {
+      const access = await lockFile(await rootDir(), "probe");
+      access.close();
+    } catch (e) {
+      throw new IdbError("NotSupportedError", `plateau: OPFS sync access is not available here: ${(e as Error)?.name ?? ""} ${(e as Error)?.message ?? String(e)}`.trim());
+    }
+  })();
+  return probed;
+}
+
 async function call(m: CallMessage): Promise<unknown> {
   switch (m.t) {
+    case "probe":
+      await probe();
+      return null;
     case "open": {
       const h = await host(m.db);
       if (h.closeTimer !== null) clearTimeout(h.closeTimer);
@@ -1262,7 +1288,15 @@ function drain(): void {
 self.onmessage = (e: MessageEvent) => {
   const m = e.data as { t: string } & Record<string, any>;
   if (m.t === "init") {
-    memory = initSync({ module: m.module }).memory;
+    try {
+      memory = initSync({ module: m.module }).memory;
+    } catch (e) {
+      // Say a browser without WebAssembly SIMD: the page falls back to its own IndexedDB.
+      const message = `plateau: the engine does not start here: ${e instanceof Error ? e.message : String(e)}`;
+      markFailed(new IdbError("NotSupportedError", message));
+      post({ t: "init", error: message });
+      return;
+    }
     setMemoryBudget(defaultBudget());
     markReady();
     post({ t: "init" });

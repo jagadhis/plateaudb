@@ -120,7 +120,9 @@ export type CallMessage =
   /** Memory facts, and the file sizes of `db` if it is open. */
   | { t: "stats"; id: number; db?: string }
   /** Compacts every store file of an open database. */
-  | { t: "compact"; id: number; db: string };
+  | { t: "compact"; id: number; db: string }
+  /** Checks that the worker runs the engine on OPFS; fails where it cannot. */
+  | { t: "probe"; id: number };
 
 /** A call message without its id, per variant. */
 export type CallRequest = CallMessage extends infer M ? (M extends CallMessage ? Omit<M, "id"> : never) : never;

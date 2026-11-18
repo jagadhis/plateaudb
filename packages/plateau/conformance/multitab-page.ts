@@ -1,12 +1,14 @@
 // One tab of the multi-tab tests: `?impl=native` drives the browser's IndexedDB, `?impl=plateau`
-// plateau's API. The runner (multitab.ts) opens several of these pages in one browser context and
+// plateau's API, `?impl=fallback` plateau's API forced onto the browser's IndexedDB. The runner (multitab.ts) opens several of these pages in one browser context and
 // calls `window.tab`; every event a connection or request sees goes to `window.tab.log`.
 
-import { plateau, runtime, type PlateauDatabase } from "../src/index";
+import { plateau, runtime, startRuntime, type PlateauDatabase } from "../src/index";
 
-const impl = new URLSearchParams(location.search).get("impl") === "plateau" ? "plateau" : "native";
+const asked = new URLSearchParams(location.search).get("impl");
+const impl = asked === "plateau" || asked === "fallback" ? asked : "native";
 const factory: IDBFactory = impl === "native" ? indexedDB : (plateau as unknown as IDBFactory);
 if (impl === "plateau") runtime();
+if (impl === "fallback") startRuntime({ backend: "indexeddb" });
 
 const log: string[] = [];
 let leaderWait = false;
@@ -41,7 +43,8 @@ const writers = new Map<string, Writer>();
 const tab = {
   impl,
   log,
-  role: () => (impl === "plateau" ? runtime().role : "native"),
+  role: () => (impl === "native" ? "native" : runtime().role),
+  backend: () => plateau.backend,
 
   /** Starts waiting on `plateau.whenLeader()`; `led()` says whether it has resolved. */
   waitLeader() {
