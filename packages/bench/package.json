@@ -1,0 +1,23 @@
+{
+  "name": "@plateaudb/bench",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "wasm": "PATH=\"$(rustc --print sysroot 2>/dev/null | grep rustup || echo $HOME/.rustup/toolchains/stable-aarch64-apple-darwin)/bin:$HOME/.cargo/bin:$PATH\" wasm-pack build ../../crates/engine --target web --release",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "bench": "bun runner/run.ts",
+    "chart": "bun runner/chart.ts"
+  },
+  "dependencies": {
+    "plateaudb": "workspace:*",
+    "@sqlite.org/sqlite-wasm": "3.54.1-build1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "playwright": "1.65.0",
+    "typescript": "^5.9.0",
+    "vite": "^8.0.0"
+  }
+}

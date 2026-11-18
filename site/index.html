@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>plateau: a browser database whose query time plateaus as data grows</title>
+  <meta name="description" content="plateau is a Rust/WebAssembly database on the Origin Private File System with an IndexedDB-compatible API and bitmap indexes, so multi-key queries stay near-flat as rows grow.">
+  <link rel="stylesheet" href="styles.css">
+  <script src="data.js"></script>
+  <script src="app.js" defer></script>
+  <script src="try.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <a class="brand" href="#top" aria-label="plateau home">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M3 26 L11 12 L21 12 L29 26" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/><path d="M11 12 H21" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/></svg>
+      <span>plateau</span>
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#status">Status</a>
+      <a href="#how">How it works</a>
+      <a href="#use">Use it</a>
+      <a href="#try">Try it</a>
+      <a href="#compare">Compare</a>
+      <a href="#bench">Benchmarks</a>
+      <a href="#limits">Limits</a>
+    </nav>
+    <span class="pill pill-warn" title="Not published, not production ready">Experimental</span>
+  </div>
+</header>
+
+<main id="top">
+  <!-- Hero -->
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Rust · WebAssembly · OPFS · IndexedDB-compatible</p>
+      <h1>A browser database whose query time <em>plateaus</em> as data grows.</h1>
+      <p class="lede">plateau stores your app's data in the browser's Origin Private File System and indexes every
+        queryable field with compressed bitmaps. A query like <code>team = 7 AND state IN (1, 2) ORDER BY updatedAt DESC LIMIT 50</code>
+        costs about the size of its answer, not the size of the table. You talk to it through the IndexedDB API you already know.</p>
+      <div class="hero-stats" id="hero-stats" aria-live="polite"></div>
+      <p class="fine" id="hero-note"></p>
+      <div class="cta">
+        <a class="btn" href="#bench">See the benchmarks</a>
+        <a class="btn btn-ghost" href="#use">How to use it</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Status -->
+  <section id="status" class="band">
+    <div class="wrap">
+      <h2>Where it stands</h2>
+      <p class="section-lede">An experiment, built in public milestones with a written pass/fail rule before every run. The engine and the IndexedDB-compatible API work end to end in Chromium and WebKit. It is on npm as <code>plateaudb</code> 0.1.0 under the MIT licence; it is pre-1.0 and not yet proven on production data.</p>
+
+      <div class="status-grid">
+        <div class="card">
+          <h3><span class="dot dot-ok"></span>Works today</h3>
+          <ul>
+            <li>IndexedDB-compatible API: databases, object stores, indexes, key ranges, cursors, transactions, events.</li>
+            <li>Conformance: <strong>84 of 85</strong> WPT-style tests pass in Chromium and WebKit; native IndexedDB passes 85. The one gap: a key stored as <code>-0</code> comes back as <code>0</code>.</li>
+            <li>Multi-key queries with <code>store.query({where, orderBy, limit, count})</code> on declared typed columns.</li>
+            <li>Lazy, paged open: a 1M-row database opens without reading the file.</li>
+            <li>Put, delete and compaction, crash-safe: a crash test over 1,410 tear points passes.</li>
+            <li>Memory budget with eviction: default 64 MiB, 24 MiB on low-memory devices.</li>
+            <li>No special server headers (no COOP/COEP); the worker and WASM start themselves.</li>
+            <li>Several tabs at once: one tab runs the worker, the others forward to it; when that tab closes another takes over within about 15 ms, and no committed write is lost. <code>versionchange</code> and <code>blocked</code> reach every tab as natively.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><span class="dot dot-warn"></span>Not yet</h3>
+          <ul>
+                        <li>No fallback to native IndexedDB where OPFS is missing.</li>
+            <li>Blob, File, ImageData and Error values throw <code>DataCloneError</code>.</li>
+            <li>A fresh page load through the API is about 2x slower than native IndexedDB (6-10 ms against 3-5 ms).</li>
+            <li>Firefox is not measured: Playwright's Firefox does not launch on the test Mac.</li>
+            <li>Pre-1.0: the API may change between minor versions.</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3 class="sub">Milestones</h3>
+      <ol class="timeline" id="timeline"></ol>
+    </div>
+  </section>
+
+  <!-- How -->
+  <section id="how">
+    <div class="wrap">
+      <h2>How it works</h2>
+      <p class="section-lede">IndexedDB answers a multi-key query by walking one index and filtering the rest row by row, one async request at a time. plateau keeps a bitmap of row ids per field value, intersects them, and walks an ordered index only inside the group it needs.</p>
+
+      <div class="arch" role="img" aria-label="Architecture: your app calls the IndexedDB-compatible API on the main thread, which sends batched messages to a dedicated worker running the Rust engine compiled to WebAssembly, which reads and writes one file per object store in OPFS through a synchronous access handle.">
+        <div class="arch-col">
+          <div class="arch-label">Main thread</div>
+          <div class="arch-box">Your app</div>
+          <div class="arch-arrow">↓ <span>indexedDB-style calls</span></div>
+          <div class="arch-box arch-accent">plateaudb<small>IndexedDB-compatible API · keys and ranges · value encoding · transaction scheduling</small></div>
+        </div>
+        <div class="arch-link"><span>postMessage<br>one batch per transaction</span></div>
+        <div class="arch-col">
+          <div class="arch-label">Dedicated worker</div>
+          <div class="arch-box arch-accent">plateau-engine (Rust → WASM)<small>planner · roaring bitmaps · grouped ordered indexes · page cache with a memory budget</small></div>
+          <div class="arch-arrow">↓ <span>FileSystemSyncAccessHandle, synchronous reads</span></div>
+          <div class="arch-box">OPFS<small>one file per object store plus a catalog · checksummed blocks · two header slots for crash safety</small></div>
+        </div>
+      </div>
+
+      <div class="explain-grid">
+        <div class="card">
+          <h3>Bitmaps for every filter</h3>
+          <p>Each indexed field keeps a compressed bitmap of the rows holding each value. <code>assignee = 12 AND label = 3 AND priority ≤ 2</code> becomes an intersection of three bitmaps, so the work follows the answer, not the table.</p>
+        </div>
+        <div class="card">
+          <h3>Ordered indexes grouped by a key</h3>
+          <p>An ordered field (<code>updatedAt</code>) can be grouped by another (<code>teamId</code>). "Latest 50 in team 7" walks team 7's list from the top and stops at 50, and a count inside a range reads the range's ends.</p>
+        </div>
+        <div class="card">
+          <h3>Lazy segments on OPFS</h3>
+          <p>Opening reads a small manifest. Columns, index blocks and rows load on first touch and are dropped least-recently-used once the memory budget is reached. Writes go to an in-memory delta and are saved as segments; compaction merges them.</p>
+        </div>
+        <div class="card">
+          <h3>Synchronous file access in a worker</h3>
+          <p>OPFS gives a dedicated worker a synchronous file handle. The engine reads exactly the bytes it needs with no per-request promise or IndexedDB transaction cost, and the API sends each transaction's work across in one message.</p>
+        </div>
+      </div>
+
+      <h3 class="sub">The same query, three plans</h3>
+      <p>Recorded by the benchmark at 1M rows. Q1 is "team = X AND state IN (…) ORDER BY updatedAt DESC LIMIT 50".</p>
+      <div class="plans" id="plans"></div>
+    </div>
+  </section>
+
+  <!-- Use -->
+  <section id="use" class="band">
+    <div class="wrap">
+      <h2>Use it</h2>
+      <p class="section-lede">plateau is the IndexedDB API, plus one optional thing: declare the fields you filter on as typed columns, and query them with <code>store.query</code>. Code that never declares columns runs unchanged as a generic store.</p>
+
+      <div class="note"><strong>Install:</strong> <code>npm install plateaudb</code>. The package ships its worker and WASM file next to its code and names them with <code>new URL(…, import.meta.url)</code>, so a bundler (Vite, webpack 5, Next.js) picks them up with no config, and no COOP/COEP headers are needed.</div>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-n">1</div>
+          <div class="step-body">
+            <h3>Open it like IndexedDB</h3>
+            <p><code>plateau</code> is an <code>IDBFactory</code>. Existing code can take it where it took <code>indexedDB</code>.</p>
+<pre><code><span class="k">import</span> { plateau, promise } <span class="k">from</span> <span class="s">"plateaudb"</span>;
+
+<span class="k">const</span> open = plateau.open(<span class="s">"tracker"</span>, <span class="n">1</span>);
+open.onupgradeneeded = () =&gt; {
+  open.result.createObjectStore(<span class="s">"issues"</span>, {
+    keyPath: <span class="s">"id"</span>,
+    <span class="c">// optional: fields you filter or sort on, as typed columns</span>
+    columns: {
+      id:         <span class="s">"f64"</span>,
+      teamId:     { kind: <span class="s">"u32"</span>, index: <span class="s">"bitmap"</span> },
+      stateId:    { kind: <span class="s">"u32"</span>, index: <span class="s">"bitmap"</span> },
+      assigneeId: { kind: <span class="s">"u32"</span>, index: <span class="s">"bitmap"</span> },
+      labelIds:   { kind: <span class="s">"u32_multi"</span>, index: <span class="s">"bitmap"</span> },
+      priority:   { kind: <span class="s">"u32"</span>, index: <span class="s">"bitmap"</span> },
+      updatedAt:  { kind: <span class="s">"f64"</span>, index: <span class="s">"ordered"</span>, group: <span class="s">"teamId"</span> },
+      title:      <span class="s">"str"</span>,
+    },
+  });
+};
+<span class="k">const</span> db = <span class="k">await</span> promise(open);</code></pre>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-n">2</div>
+          <div class="step-body">
+            <h3>Read and write with the usual calls</h3>
+            <p><code>put</code>, <code>get</code>, <code>getAll</code>, <code>count</code>, cursors, key ranges and indexes behave as IndexedDB's do. Fields you did not declare are stored with the row.</p>
+<pre><code><span class="k">const</span> tx = db.transaction(<span class="s">"issues"</span>, <span class="s">"readwrite"</span>);
+<span class="k">const</span> issues = tx.objectStore(<span class="s">"issues"</span>);
+issues.put({ id: <span class="n">1</span>, teamId: <span class="n">7</span>, stateId: <span class="n">2</span>, assigneeId: <span class="n">12</span>, labelIds: [<span class="n">3</span>, <span class="n">9</span>],
+             priority: <span class="n">1</span>, updatedAt: Date.now(), title: <span class="s">"Fix login"</span>, notes: { any: <span class="s">"shape"</span> } });
+<span class="k">const</span> one = <span class="k">await</span> promise(issues.get(<span class="n">1</span>));</code></pre>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-n">3</div>
+          <div class="step-body">
+            <h3>Ask multi-key questions</h3>
+            <p>Filters are ANDed: <code>eq</code>, <code>in</code> and <code>range</code> (<code>gt</code>, <code>gte</code>, <code>lt</code>, <code>lte</code>). Add <code>orderBy</code> and <code>limit</code>, or <code>count: true</code>. The request's <code>plan</code> names the plan it chose.</p>
+<pre><code><span class="k">const</span> store = db.transaction(<span class="s">"issues"</span>).objectStore(<span class="s">"issues"</span>);
+
+<span class="c">// latest 50 open issues in team 7</span>
+<span class="k">const</span> latest = <span class="k">await</span> promise(store.query({
+  where: [
+    { field: <span class="s">"teamId"</span>,  op: <span class="s">"eq"</span>, value: <span class="n">7</span> },
+    { field: <span class="s">"stateId"</span>, op: <span class="s">"in"</span>, values: [<span class="n">1</span>, <span class="n">2</span>] },
+  ],
+  orderBy: { field: <span class="s">"updatedAt"</span>, desc: <span class="k">true</span> },
+  limit: <span class="n">50</span>,
+}));
+
+<span class="c">// how many changed in team 7 this week</span>
+<span class="k">const</span> n = <span class="k">await</span> promise(store.query({
+  where: [
+    { field: <span class="s">"teamId"</span>,    op: <span class="s">"eq"</span>, value: <span class="n">7</span> },
+    { field: <span class="s">"updatedAt"</span>, op: <span class="s">"range"</span>, gt: weekAgo },
+  ],
+  count: <span class="k">true</span>,
+}));</code></pre>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-n">4</div>
+          <div class="step-body">
+            <h3>Tune memory and space, and follow changes from other tabs</h3>
+<pre><code><span class="k">await</span> plateau.setMemoryBudget(<span class="n">32</span> * <span class="n">1024</span> * <span class="n">1024</span>); <span class="c">// or null for no limit</span>
+<span class="k">const</span> stats = <span class="k">await</span> plateau.memoryStats(<span class="s">"tracker"</span>);  <span class="c">// WASM memory, cached and file bytes</span>
+<span class="k">await</span> db.compact();                                 <span class="c">// merge segments, reclaim deleted rows</span>
+<span class="k">const</span> stop = db.observe(<span class="s">"issues"</span>, ({ stores }) =&gt; render()); <span class="c">// after a commit in any tab</span></code></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="kinds">
+        <h3 class="sub">Column kinds</h3>
+        <table class="table">
+          <thead><tr><th>Kind</th><th>Holds</th><th>Index options</th></tr></thead>
+          <tbody>
+            <tr><td><code>u32</code></td><td>Unsigned 32-bit integer (ids, enums, priorities)</td><td><code>bitmap</code></td></tr>
+            <tr><td><code>u32_multi</code></td><td>A list of u32 (labels, tags); matches if any element matches</td><td><code>bitmap</code></td></tr>
+            <tr><td><code>f64</code></td><td>Number (timestamps, scores). The primary key column must be <code>f64</code></td><td><code>ordered</code>, optionally <code>group</code> by a bitmap column</td></tr>
+            <tr><td><code>str</code></td><td>String, stored with the row</td><td>none</td></tr>
+          </tbody>
+        </table>
+        <p class="fine">Typed stores take plain objects. A store without <code>columns</code> takes any structured-clone value IndexedDB stores, except Blob, File, ImageData and Error.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Try live sync -->
+  <section id="try" class="band">
+    <div class="wrap">
+      <h2>Try live sync</h2>
+      <p class="lede">An orders list kept live from a server-sent event stream, with plateau as the local store and only the leader tab holding the stream. The server is a stand-in for an orders app's backend, with orders in memory. Edit an order, cut the stream, close the leader tab, and watch what each tab does.</p>
+      <div id="try-off" class="card" hidden>
+        <p>This needs a page served over http (OPFS, Web Locks and an event stream do not work from a file). Start the demo server and open this page from it:</p>
+<pre><code>cd examples/live-sync
+bun run build
+bun server.ts --orders 1000 --poll-ms 1000
+# open http://localhost:5190/site/#try</code></pre>
+      </div>
+      <div id="try-on" hidden>
+        <div class="try-controls">
+          <button class="tbtn" id="t-edit">Edit an order</button>
+          <button class="tbtn" id="t-burst">Edit 25 in a row</button>
+          <button class="tbtn" id="t-cut">Cut the stream 5 s, edit 10 orders meanwhile</button>
+          <button class="tbtn" id="t-close">Close the leader tab</button>
+          <button class="tbtn" id="t-add">Open another tab</button>
+          <button class="tbtn" id="t-reset">Reset data</button>
+          <label class="check">Server delay
+            <select id="t-poll"><option value="0">none (0 ms)</option><option value="1000" selected>1 s, like a backend polling its change table</option></select>
+          </label>
+        </div>
+        <div class="try-tabs" id="try-tabs"></div>
+        <p class="fine" id="try-log">Each frame is a tab of this origin. The first tab to start leads; the status line in each frame says which is which. An edited order moves to the top of every tab.</p>
+      </div>
+      <h3 class="sub">What it measured</h3>
+      <div id="live-numbers"></div>
+    </div>
+  </section>
+
+  <!-- Compare -->
+  <section id="compare">
+    <div class="wrap">
+      <h2>How it compares</h2>
+      <p class="section-lede">The niche plateau aims at is empty: no engine we found is written for OPFS, speaks the IndexedDB API, and plans multi-key queries over every field. The nearest options each give up one of those.</p>
+
+      <div class="table-scroll">
+        <table class="table compare" id="compare-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>plateau</th>
+              <th>Native IndexedDB</th>
+              <th>Dexie</th>
+              <th>SQLite-WASM<br><small>opfs-sahpool VFS</small></th>
+              <th>PGlite</th>
+              <th>RxDB<br><small>OPFS storage</small></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th>API</th><td class="hi">IndexedDB, plus <code>store.query</code></td><td>IndexedDB</td><td>Wrapper over IndexedDB</td><td>SQL</td><td>SQL (Postgres)</td><td>Document queries</td></tr>
+            <tr><th>Drop-in for IndexedDB code</th><td class="hi yes">Yes, 84/85 conformance</td><td class="yes">It is the standard</td><td class="no">No, its own API</td><td class="no">No</td><td class="no">No</td><td class="no">No</td></tr>
+            <tr><th>Storage</th><td class="hi">OPFS</td><td>Browser-managed (LevelDB or SQLite in Chrome, SQLite in Safari)</td><td>Native IndexedDB</td><td>OPFS</td><td>OPFS or IndexedDB</td><td>OPFS</td></tr>
+            <tr><th>Multi-key query</th><td class="hi">Bitmap intersection over every declared field; ordered walk inside a group</td><td>One index; a compound index only through its leading parts</td><td>Compound index or in-memory filter; <code>or()</code> runs branches separately</td><td>SQLite planner over B-tree indexes</td><td>Postgres planner</td><td>One index, the rest filtered in memory</td></tr>
+            <tr><th>Engine runs in</th><td class="hi">Dedicated worker</td><td>Browser's own process</td><td>Main thread over IndexedDB</td><td>Dedicated worker</td><td>Worker for OPFS</td><td>Worker</td></tr>
+            <tr><th>Server headers (COOP/COEP)</th><td class="hi yes">Not needed</td><td class="yes">Not needed</td><td class="yes">Not needed</td><td class="yes">Not needed with sahpool</td><td>Not checked</td><td>Not checked</td></tr>
+            <tr><th>Several tabs at once</th><td class="hi yes">Yes: one tab runs the worker, the others forward to it, failover when it closes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No transparent multi-connection</td><td>Not checked</td><td>Not checked</td></tr>
+            <tr><th>Safari</th><td class="hi yes">Measured in WebKit 27.2</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">16.4+</td><td class="no">OPFS mode fails (Safari's 252-handle cap)</td><td>Not checked</td></tr>
+            <tr><th>Maturity</th><td class="hi warn">Experimental</td><td class="yes">Everywhere</td><td class="yes">Mature, widely used</td><td class="yes">Mature, crash-tested</td><td>Active</td><td>Commercial</td></tr>
+            <tr><th>Licence</th><td class="hi">Not chosen</td><td>Built in</td><td>Apache-2.0</td><td>Public domain</td><td>Apache-2.0</td><td>Paid (premium plugin)</td></tr>
+            <tr><th>In our benchmark</th><td class="hi yes">Yes</td><td class="yes">Yes</td><td>No</td><td class="yes">Yes, behind the same query layer</td><td>No</td><td>No</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="fine">Facts about other projects come from their own documentation, read 2026-11-17 for plateau's prior-art review. "Not checked" means we did not find it stated. Only native IndexedDB and SQLite-WASM were benchmarked here; the rest are not measured on this page.</p>
+
+      <div class="explain-grid three">
+        <div class="card">
+          <h3>Against native IndexedDB</h3>
+          <p>Same API, much faster where IndexedDB is slow: multi-key queries, counts, point reads and write commits. IndexedDB still wins a fresh page load, starts with no worker and runs in every tab.</p>
+        </div>
+        <div class="card">
+          <h3>Against SQLite-WASM</h3>
+          <p>SQLite is the strong control: mature, with a real planner. At 100k and 1M rows plateau is 1.3-8x faster on the four queries, 3-4.5x on point reads and 6-16x on update commits, and reaches a fresh page's first answer about 4x sooner. You trade SQL for the IndexedDB API.</p>
+        </div>
+        <div class="card">
+          <h3>Against wrappers (Dexie, RxDB)</h3>
+          <p>Wrappers add a nicer API on top of a storage engine and inherit its costs. plateau replaces the engine under the API, so a wrapper could sit on top of it. Dexie on plateau is a goal, not yet tested.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Bench -->
+  <section id="bench" class="band">
+    <div class="wrap">
+      <h2>Benchmarks</h2>
+      <p class="section-lede">A Linear-like issue tracker: issues with team, state, assignee, labels, priority and timestamps, at 10k, 100k and 1M rows. Every engine returns identical results at every size in both browsers. Median of 20 timed runs after warm-up, measured on the main thread, so worker engines include the message round trip.</p>
+
+      <div class="controls" role="group" aria-label="Benchmark filters">
+        <div class="seg" id="ctl-browser" role="radiogroup" aria-label="Browser"></div>
+        <div class="seg" id="ctl-size" role="radiogroup" aria-label="Rows"></div>
+        <label class="check"><input type="checkbox" id="ctl-engine"> Show plateau engine-direct</label>
+      </div>
+      <div class="legend" id="legend"></div>
+
+      <div class="queries-key">
+        <div><b>Q1</b> team = X AND state IN (…) ORDER BY updatedAt DESC LIMIT 50</div>
+        <div><b>Q2</b> assignee = X AND label = Y AND priority ≤ Z</div>
+        <div><b>Q3</b> COUNT where team = X AND updatedAt &gt; T</div>
+        <div><b>Q4</b> team = X AND state IN (…) AND priority = P ORDER BY updatedAt DESC LIMIT 50</div>
+        <div><b>Gets</b> 1,000 point reads by primary key</div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-head"><h3>Warm queries</h3><span class="fine">milliseconds, log scale · shorter is faster · ×N is IndexedDB time over this engine's</span></div>
+        <div id="chart-queries" class="chart"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-head"><h3>Growth from 10k to 1M rows</h3><span class="fine">milliseconds, log scale · Q1 and Q4 always return 50 rows, so a flat line is the goal; Q2 and Q3 answers grow with the table</span></div>
+        <div id="chart-growth" class="small-multiples"></div>
+      </div>
+
+      <div class="two">
+        <div class="chart-card">
+          <div class="chart-head"><h3>Start-up to first answer</h3><span class="fine">ms to the first Q1 result</span></div>
+          <div id="chart-startup" class="chart"></div>
+          <p class="fine"><b>Reopen</b>: close and open again in the same page. <b>Fresh page</b>: a new page load with files cached. <b>First-ever load</b>: a new page with nothing cached.</p>
+        </div>
+        <div class="chart-card">
+          <div class="chart-head"><h3>Writes</h3><span class="fine">ms, log scale</span></div>
+          <div id="chart-writes" class="chart"></div>
+          <p class="fine"><b>Update commit</b>: replace 1,000 rows and delete 1,000 in one durable commit. <b>Bulk load</b>: insert every row from empty.</p>
+        </div>
+      </div>
+
+      <div class="two">
+        <div class="chart-card">
+          <div class="chart-head"><h3>Memory budget at 1M rows</h3><span class="fine">peak WASM memory in the worker · and 1,000 gets</span></div>
+          <div id="chart-memory" class="chart"></div>
+          <p class="fine">A smaller budget evicts more often: point reads slow down once the working set no longer fits, queries barely move.</p>
+        </div>
+        <div class="chart-card">
+          <div class="chart-head"><h3>Size on disk</h3><span class="fine">MiB, after load and compaction</span></div>
+          <div id="chart-disk" class="chart"></div>
+          <p class="fine">Chromium's IndexedDB compresses its LevelDB files, so it is smaller there. SQLite's file size was not recorded.</p>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-head"><h3>All numbers</h3><span class="fine">median ms (p95) at the selected size and browser</span></div>
+        <div class="table-scroll"><table class="table nums" id="table-all"></table></div>
+      </div>
+
+      <details class="method">
+        <summary>Method and caveats</summary>
+        <div id="method"></div>
+      </details>
+    </div>
+  </section>
+
+  <!-- Limits -->
+  <section id="limits">
+    <div class="wrap">
+      <h2>Honest limits and what is next</h2>
+      <div class="explain-grid">
+        <div class="card">
+          <h3>Fresh page start-up</h3>
+          <p>Through the API, a fresh page reaches its first answer in 6-10 ms against native IndexedDB's 3-5 ms. The cost is loading the API's code, starting a worker and compiling WASM. That is next (M2c).</p>
+        </div>
+        <div class="card">
+          <h3>One machine, two browsers</h3>
+          <p>Every number here comes from one Apple M5 Max, headless, with a warm OS file cache. Firefox is not measured yet, and no phone has been measured.</p>
+        </div>
+        <div class="card">
+          <h3>Generic stores are slower</h3>
+          <p>Without declared columns, values are stored as tagged JSON and queries go through IndexedDB-style indexes. It still beats native IndexedDB on most measures, by less.</p>
+        </div>
+        <div class="card">
+          <h3>Durability and tabs</h3>
+          <p>Commits are crash-safe, and they survive the tab that runs the database closing: a transaction it was running for another tab aborts with <code>UnknownError</code>. A commit whose answer was lost with that tab may have landed although the transaction reports an abort. The full WPT IndexedDB suite and a fallback to native IndexedDB are planned, not built.</p>
+        </div>
+      </div>
+      <h3 class="sub">Roadmap</h3>
+      <ol class="roadmap">
+        <li><b>M2c</b> API start-up: close the fresh-page gap with native IndexedDB.</li>
+        <li><b>M2b</b> Run the full WPT IndexedDB suite and report a pass rate.</li>
+        <li><b>M3</b> A planner with statistics for queries the current rules do not cover.</li>
+        <li>Fallback to native IndexedDB where OPFS is missing, Dexie on top, then a published package.</li>
+      </ol>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <p>plateau · <a href="https://github.com/jagadhis/plateaudb"><code>jagadhis/plateaudb</code></a> · MIT · numbers from <code>results/</code>, generated <span id="gen"></span>.</p>
+  </div>
+</footer>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+</body>
+</html>

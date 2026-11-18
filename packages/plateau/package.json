@@ -1,0 +1,57 @@
+{
+  "name": "plateaudb",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A browser database on OPFS with an IndexedDB-compatible API, written in Rust and compiled to WebAssembly; multi-key query time stays near-flat as rows grow",
+  "license": "MIT",
+  "author": "jagadhis",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jagadhis/plateaudb.git"
+  },
+  "homepage": "https://github.com/jagadhis/plateaudb",
+  "bugs": {
+    "url": "https://github.com/jagadhis/plateaudb/issues"
+  },
+  "keywords": [
+    "indexeddb",
+    "opfs",
+    "database",
+    "browser",
+    "wasm",
+    "webassembly",
+    "rust",
+    "offline",
+    "local-first",
+    "bitmap-index"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "bun build.ts",
+    "prepack": "bun build.ts",
+    "test": "bun test test/",
+    "typecheck": "tsc --noEmit",
+    "conformance": "bun conformance/run.ts",
+    "multitab": "bun conformance/multitab.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "playwright": "1.65.0",
+    "typescript": "^5.9.0",
+    "vite": "^8.0.0"
+  }
+}

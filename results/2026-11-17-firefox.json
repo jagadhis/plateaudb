@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-17",
+  "browser": "firefox",
+  "status": "blocked",
+  "note": "Playwright Firefox, headless",
+  "launchError": "_wrapApiCall: Failed to launch the browser process. | [pid=14539][err] *** You are running in headless mode. | [pid=14539][err] Could not find profile folder. |   - [pid=14539][err] *** You are running in headless mode."
+}

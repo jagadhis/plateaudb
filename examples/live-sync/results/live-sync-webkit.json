@@ -1,0 +1,353 @@
+{
+  "browser": "webkit",
+  "version": "webkit",
+  "at": "2026-11-18T03:40:43.282Z",
+  "edits": 100,
+  "latency": {
+    "plateau@poll0": {
+      "edits": 100,
+      "missed": 0,
+      "leader": {
+        "n": 100,
+        "p50": 5.7,
+        "p95": 15.8,
+        "min": 3.7,
+        "max": 22.1
+      },
+      "follower": {
+        "n": 100,
+        "p50": 8.3,
+        "p95": 17.5,
+        "min": 5,
+        "max": 23.2
+      },
+      "leaderStages": {
+        "eventAfterEdit": {
+          "n": 100,
+          "p50": 0.7,
+          "p95": 1.4,
+          "min": 0.4,
+          "max": 3.3
+        },
+        "fetch": {
+          "n": 100,
+          "p50": 1.7,
+          "p95": 3.2,
+          "min": 1.2,
+          "max": 4.4
+        },
+        "commit": {
+          "n": 100,
+          "p50": 1.2,
+          "p95": 4.5,
+          "min": 0.7,
+          "max": 17.2
+        },
+        "renderAfterCommit": {
+          "n": 100,
+          "p50": 1.7,
+          "p95": 8.8,
+          "min": 1,
+          "max": 14.5
+        }
+      }
+    },
+    "plateau@poll1000": {
+      "edits": 100,
+      "missed": 0,
+      "leader": {
+        "n": 100,
+        "p50": 575.8,
+        "p95": 992.9,
+        "min": 13,
+        "max": 1010.9
+      },
+      "follower": {
+        "n": 100,
+        "p50": 580.2,
+        "p95": 996.4,
+        "min": 14,
+        "max": 1016
+      },
+      "leaderStages": {
+        "eventAfterEdit": {
+          "n": 100,
+          "p50": 568,
+          "p95": 987.6,
+          "min": 7.6,
+          "max": 1001.2
+        },
+        "fetch": {
+          "n": 100,
+          "p50": 3.4,
+          "p95": 4.2,
+          "min": 1.3,
+          "max": 4.3
+        },
+        "commit": {
+          "n": 100,
+          "p50": 2.3,
+          "p95": 3.6,
+          "min": 0.8,
+          "max": 6.2
+        },
+        "renderAfterCommit": {
+          "n": 100,
+          "p50": 2.3,
+          "p95": 3.1,
+          "min": 0.8,
+          "max": 3.4
+        }
+      }
+    },
+    "rest@poll0": {
+      "edits": 100,
+      "missed": 0,
+      "leader": {
+        "n": 100,
+        "p50": 4.1,
+        "p95": 12.8,
+        "min": 2.4,
+        "max": 17.1
+      },
+      "follower": {
+        "n": 100,
+        "p50": 4.8,
+        "p95": 15.4,
+        "min": 2.8,
+        "max": 18.9
+      }
+    },
+    "rest@poll1000": {
+      "edits": 100,
+      "missed": 0,
+      "leader": {
+        "n": 100,
+        "p50": 499.2,
+        "p95": 890,
+        "min": 38.7,
+        "max": 989.7
+      },
+      "follower": {
+        "n": 100,
+        "p50": 499.2,
+        "p95": 890.1,
+        "min": 38.7,
+        "max": 989.7
+      }
+    }
+  },
+  "catchup": {
+    "history kept": {
+      "orders": 1000,
+      "gapEdits": 50,
+      "distinctEditedOrders": 40,
+      "reconnectAfterDropMs": 3010,
+      "allAppliedAfterDropMs": 4130,
+      "leader": {
+        "missing": 0,
+        "stale": 0
+      },
+      "follower": {
+        "missing": 0,
+        "stale": 0
+      }
+    },
+    "history purged": {
+      "orders": 1000,
+      "gapEdits": 50,
+      "distinctEditedOrders": 40,
+      "reconnectAfterDropMs": 3011,
+      "allAppliedAfterDropMs": 4137,
+      "leader": {
+        "missing": 0,
+        "stale": 0
+      },
+      "follower": {
+        "missing": 0,
+        "stale": 0
+      }
+    }
+  },
+  "cold": {
+    "10000 orders": {
+      "reps": 3,
+      "mismatches": 0,
+      "restFirstRender": {
+        "n": 3,
+        "p50": 131,
+        "p95": 148.5,
+        "min": 130.7,
+        "max": 148.5,
+        "runsMs": [
+          131,
+          149,
+          131
+        ]
+      },
+      "restRepeatFirstRender": {
+        "n": 3,
+        "p50": 122.9,
+        "p95": 129.8,
+        "min": 121.9,
+        "max": 129.8,
+        "runsMs": [
+          123,
+          130,
+          122
+        ]
+      },
+      "plateauFirstVisitFirstRender": {
+        "n": 3,
+        "p50": 181.6,
+        "p95": 190.5,
+        "min": 179.7,
+        "max": 190.5,
+        "runsMs": [
+          180,
+          190,
+          182
+        ]
+      },
+      "plateauFirstVisitLoaded": {
+        "n": 3,
+        "p50": 178.3,
+        "p95": 184.5,
+        "min": 174.8,
+        "max": 184.5,
+        "runsMs": [
+          178,
+          184,
+          175
+        ]
+      },
+      "plateauReturnFirstRender": {
+        "n": 3,
+        "p50": 134.1,
+        "p95": 134.3,
+        "min": 131.3,
+        "max": 134.3,
+        "runsMs": [
+          134,
+          134,
+          131
+        ]
+      },
+      "plateauReturnCaughtUp": {
+        "n": 3,
+        "p50": 156.2,
+        "p95": 156.7,
+        "min": 153.3,
+        "max": 156.7,
+        "runsMs": [
+          156,
+          157,
+          153
+        ]
+      }
+    },
+    "100000 orders": {
+      "reps": 3,
+      "mismatches": 0,
+      "restFirstRender": {
+        "n": 3,
+        "p50": 135.8,
+        "p95": 137.3,
+        "min": 134.1,
+        "max": 137.3,
+        "runsMs": [
+          136,
+          134,
+          137
+        ]
+      },
+      "restRepeatFirstRender": {
+        "n": 3,
+        "p50": 125.9,
+        "p95": 134.8,
+        "min": 125.5,
+        "max": 134.8,
+        "runsMs": [
+          126,
+          135,
+          125
+        ]
+      },
+      "plateauFirstVisitFirstRender": {
+        "n": 3,
+        "p50": 220.6,
+        "p95": 221.1,
+        "min": 219.3,
+        "max": 221.1,
+        "runsMs": [
+          219,
+          221,
+          221
+        ]
+      },
+      "plateauFirstVisitLoaded": {
+        "n": 3,
+        "p50": 304.5,
+        "p95": 316.2,
+        "min": 303.7,
+        "max": 316.2,
+        "runsMs": [
+          304,
+          304,
+          316
+        ]
+      },
+      "plateauReturnFirstRender": {
+        "n": 3,
+        "p50": 134.7,
+        "p95": 137,
+        "min": 129.9,
+        "max": 137,
+        "runsMs": [
+          137,
+          130,
+          135
+        ]
+      },
+      "plateauReturnCaughtUp": {
+        "n": 3,
+        "p50": 157.6,
+        "p95": 160.4,
+        "min": 157,
+        "max": 160.4,
+        "runsMs": [
+          160,
+          157,
+          158
+        ]
+      }
+    }
+  },
+  "failover": {
+    "close": {
+      "editsDuringRun": 125,
+      "failovers": [
+        {
+          "round": 1,
+          "leaderTabsLeft": 2,
+          "newLeaderStreamOpenMs": 16,
+          "newLeaderReadyMs": 25
+        },
+        {
+          "round": 2,
+          "leaderTabsLeft": 1,
+          "newLeaderStreamOpenMs": 16,
+          "newLeaderReadyMs": 27
+        }
+      ],
+      "survivors": 1,
+      "versionsVsServer": [
+        {
+          "missing": 0,
+          "stale": 0
+        }
+      ],
+      "editAfterFailoverRenderedEverywhere": true
+    }
+  }
+}

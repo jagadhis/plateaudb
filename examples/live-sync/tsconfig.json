@@ -1,0 +1,4 @@
+{
+  "extends": "../../packages/plateau/tsconfig.json",
+  "include": ["src", "server.ts", "measure.ts", "vite.config.ts"]
+}

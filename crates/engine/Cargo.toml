@@ -1,0 +1,24 @@
+[package]
+name = "plateau-engine"
+version = "0.0.0"
+edition = "2024"
+description = "plateau: a browser database whose query time plateaus as data grows (M1f)"
+publish = false
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bytemuck = "1.25.2"
+itoa = "1"
+roaring = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+xxhash-rust = { version = "0.8.21", features = ["xxh3"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.130"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O3"]

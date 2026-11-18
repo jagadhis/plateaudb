@@ -1,0 +1,22 @@
+{
+  "name": "@plateaudb/live-sync",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "An orders list kept live from a server-sent event stream, with plateau as the local store",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "server": "bun server.ts",
+    "measure": "bun measure.ts"
+  },
+  "dependencies": {
+    "plateaudb": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "playwright": "1.65.0",
+    "typescript": "^5.9.0",
+    "vite": "^8.0.0"
+  }
+}

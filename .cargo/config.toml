@@ -1,0 +1,4 @@
+# WebAssembly SIMD ships in Chrome 91+, Firefox 89+ and Safari 16.4+; roaring uses it for
+# bitmap intersections and unions.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

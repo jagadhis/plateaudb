@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>plateau bench</title>
+    <script>
+      // Head bootstrap: starts the engine a fresh-page run (`?fresh=<engine>`) will use at
+      // navigation, while the app bundle is still loading; the app's open() attaches to it. Every
+      // engine gets one: plateau (engine-direct and through its IndexedDB-compatible API) spawns its
+      // worker and compiles its WASM (posting the Module to the worker), SQLite spawns its worker
+      // (which starts loading its WASM), IndexedDB issues indexedDB.open. None of them reads the
+      // database here except IndexedDB's own open request.
+      (function () {
+        // A memory budget variant (`plateau@24mb`) starts the same engine.
+        var engine = (new URLSearchParams(location.search).get("fresh") || "").split("@")[0] || null;
+        var b = { engine: engine, startedAt: performance.now() };
+        if (engine === "idb") {
+          b.idb = indexedDB.open("plateau-bench", 1);
+        } else if (engine === "plateau-idb" || engine === "plateau-idb-generic") {
+          // plateau's IndexedDB-compatible API: its worker, with the WASM compiled here and posted.
+          var hostUrl = "__PLATEAU_IDB_WORKER__";
+          if (hostUrl.charAt(0) !== ".") return;
+          var hw = new Worker(hostUrl, { type: "module" });
+          b.worker = hw;
+          var hwasm = "__PLATEAU_WASM__";
+          WebAssembly.compileStreaming(fetch(hwasm))
+            .catch(function () {
+              return fetch(hwasm).then(function (r) { return r.arrayBuffer(); }).then(WebAssembly.compile);
+            })
+            .then(function (m) {
+              b.compiledAt = performance.now();
+              hw.postMessage({ t: "init", module: m });
+            });
+        } else if (engine === "plateau" || engine === "sqlite") {
+          var url = engine === "plateau" ? "__PLATEAU_WORKER__" : "__SQLITE_WORKER__";
+          if (url.charAt(0) !== ".") return;
+          var w = new Worker(url, { type: "module" });
+          b.worker = w;
+          if (engine === "plateau") {
+            var wasm = "__PLATEAU_WASM__";
+            b.init = new Promise(function (resolve, reject) {
+              w.addEventListener("message", function onInit(e) {
+                if (e.data && e.data.id === 0) {
+                  w.removeEventListener("message", onInit);
+                  resolve(e.data);
+                }
+              });
+              WebAssembly.compileStreaming(fetch(wasm))
+                .catch(function () {
+                  return fetch(wasm).then(function (r) { return r.arrayBuffer(); }).then(WebAssembly.compile);
+                })
+                .then(function (m) {
+                  b.compiledAt = performance.now();
+                  w.postMessage({ id: 0, op: "init", args: [m] });
+                }, reject);
+            });
+          }
+        }
+        window.__boot = b;
+      })();
+    </script>
+  </head>
+  <body>
+    <p id="status">loading</p>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,372 @@
+{
+  "browser": "chromium",
+  "version": "chromium",
+  "at": "2026-11-18T03:36:50.625Z",
+  "edits": 100,
+  "latency": {
+    "plateau@poll0": {
+      "edits": 100,
+      "missed": 0,
+      "leader": {
+        "n": 100,
+        "p50": 7.6,
+        "p95": 18.4,
+        "min": 4.1,
+        "max": 27
+      },
+      "follower": {
+        "n": 100,
+        "p50": 7.4,
+        "p95": 20.3,
+        "min": 4.7,
+        "max": 22.6
+      },
+      "leaderStages": {
+        "eventAfterEdit": {
+          "n": 100,
+          "p50": 0.4,
+          "p95": 1,
+          "min": 0.3,
+          "max": 3.2
+        },
+        "fetch": {
+          "n": 100,
+          "p50": 0.8,
+          "p95": 2,
+          "min": 0.5,
+          "max": 3.5
+        },
+        "commit": {
+          "n": 100,
+          "p50": 4.1,
+          "p95": 6.5,
+          "min": 2.2,
+          "max": 7.8
+        },
+        "renderAfterCommit": {
+          "n": 100,
+          "p50": 0.9,
+          "p95": 12.8,
+          "min": 0.4,
+          "max": 19.8
+        }
+      }
+    },
+    "plateau@poll1000": {
+      "edits": 100,
+      "missed": 0,
+      "leader": {
+        "n": 100,
+        "p50": 531,
+        "p95": 928.1,
+        "min": 44.5,
+        "max": 1007.9
+      },
+      "follower": {
+        "n": 100,
+        "p50": 532.1,
+        "p95": 929.6,
+        "min": 49,
+        "max": 1008.9
+      },
+      "leaderStages": {
+        "eventAfterEdit": {
+          "n": 100,
+          "p50": 518.5,
+          "p95": 923,
+          "min": 36.8,
+          "max": 1000.4
+        },
+        "fetch": {
+          "n": 100,
+          "p50": 1.5,
+          "p95": 2.3,
+          "min": 0.7,
+          "max": 2.8
+        },
+        "commit": {
+          "n": 100,
+          "p50": 4.7,
+          "p95": 8,
+          "min": 2.4,
+          "max": 10.7
+        },
+        "renderAfterCommit": {
+          "n": 100,
+          "p50": 1,
+          "p95": 1.9,
+          "min": 0.5,
+          "max": 2.7
+        }
+      }
+    },
+    "rest@poll0": {
+      "edits": 100,
+      "missed": 0,
+      "leader": {
+        "n": 100,
+        "p50": 3.2,
+        "p95": 17.8,
+        "min": 1.6,
+        "max": 20.7
+      },
+      "follower": {
+        "n": 100,
+        "p50": 2.8,
+        "p95": 16.1,
+        "min": 1.7,
+        "max": 18.1
+      }
+    },
+    "rest@poll1000": {
+      "edits": 100,
+      "missed": 0,
+      "leader": {
+        "n": 100,
+        "p50": 502.7,
+        "p95": 983,
+        "min": 4.1,
+        "max": 991.5
+      },
+      "follower": {
+        "n": 100,
+        "p50": 502,
+        "p95": 983,
+        "min": 4,
+        "max": 991.6
+      }
+    }
+  },
+  "catchup": {
+    "history kept": {
+      "orders": 1000,
+      "gapEdits": 50,
+      "distinctEditedOrders": 40,
+      "reconnectAfterDropMs": 3016,
+      "allAppliedAfterDropMs": 3035,
+      "leader": {
+        "missing": 0,
+        "stale": 0
+      },
+      "follower": {
+        "missing": 0,
+        "stale": 0
+      }
+    },
+    "history purged": {
+      "orders": 1000,
+      "gapEdits": 50,
+      "distinctEditedOrders": 40,
+      "reconnectAfterDropMs": 3026,
+      "allAppliedAfterDropMs": 3037,
+      "leader": {
+        "missing": 0,
+        "stale": 0
+      },
+      "follower": {
+        "missing": 0,
+        "stale": 0
+      }
+    }
+  },
+  "cold": {
+    "10000 orders": {
+      "reps": 3,
+      "mismatches": 0,
+      "restFirstRender": {
+        "n": 3,
+        "p50": 39.4,
+        "p95": 41.1,
+        "min": 39.1,
+        "max": 41.1,
+        "runsMs": [
+          41,
+          39,
+          39
+        ]
+      },
+      "restRepeatFirstRender": {
+        "n": 3,
+        "p50": 36.7,
+        "p95": 36.7,
+        "min": 35.3,
+        "max": 36.7,
+        "runsMs": [
+          35,
+          37,
+          37
+        ]
+      },
+      "plateauFirstVisitFirstRender": {
+        "n": 3,
+        "p50": 112.6,
+        "p95": 114.1,
+        "min": 101.5,
+        "max": 114.1,
+        "runsMs": [
+          101,
+          113,
+          114
+        ]
+      },
+      "plateauFirstVisitLoaded": {
+        "n": 3,
+        "p50": 101.9,
+        "p95": 108.8,
+        "min": 100,
+        "max": 108.8,
+        "runsMs": [
+          100,
+          109,
+          102
+        ]
+      },
+      "plateauReturnFirstRender": {
+        "n": 3,
+        "p50": 46.5,
+        "p95": 48.5,
+        "min": 44.9,
+        "max": 48.5,
+        "runsMs": [
+          45,
+          47,
+          49
+        ]
+      },
+      "plateauReturnCaughtUp": {
+        "n": 3,
+        "p50": 59.9,
+        "p95": 64.6,
+        "min": 58.9,
+        "max": 64.6,
+        "runsMs": [
+          59,
+          60,
+          65
+        ]
+      }
+    },
+    "100000 orders": {
+      "reps": 3,
+      "mismatches": 0,
+      "restFirstRender": {
+        "n": 3,
+        "p50": 43.3,
+        "p95": 45.6,
+        "min": 42.4,
+        "max": 45.6,
+        "runsMs": [
+          42,
+          43,
+          46
+        ]
+      },
+      "restRepeatFirstRender": {
+        "n": 3,
+        "p50": 40.5,
+        "p95": 48.2,
+        "min": 39.5,
+        "max": 48.2,
+        "runsMs": [
+          40,
+          41,
+          48
+        ]
+      },
+      "plateauFirstVisitFirstRender": {
+        "n": 3,
+        "p50": 142.8,
+        "p95": 152,
+        "min": 138.2,
+        "max": 152,
+        "runsMs": [
+          138,
+          143,
+          152
+        ]
+      },
+      "plateauFirstVisitLoaded": {
+        "n": 3,
+        "p50": 226.3,
+        "p95": 234.9,
+        "min": 221.8,
+        "max": 234.9,
+        "runsMs": [
+          222,
+          226,
+          235
+        ]
+      },
+      "plateauReturnFirstRender": {
+        "n": 3,
+        "p50": 47.3,
+        "p95": 47.8,
+        "min": 46.5,
+        "max": 47.8,
+        "runsMs": [
+          47,
+          48,
+          47
+        ]
+      },
+      "plateauReturnCaughtUp": {
+        "n": 3,
+        "p50": 61.4,
+        "p95": 63.1,
+        "min": 61.3,
+        "max": 63.1,
+        "runsMs": [
+          61,
+          63,
+          61
+        ]
+      }
+    }
+  },
+  "failover": {
+    "close": {
+      "editsDuringRun": 121,
+      "failovers": [
+        {
+          "round": 1,
+          "leaderTabsLeft": 2,
+          "newLeaderStreamOpenMs": 10,
+          "newLeaderReadyMs": 19
+        },
+        {
+          "round": 2,
+          "leaderTabsLeft": 1,
+          "newLeaderStreamOpenMs": 10,
+          "newLeaderReadyMs": 17
+        }
+      ],
+      "survivors": 1,
+      "versionsVsServer": [
+        {
+          "missing": 0,
+          "stale": 0
+        }
+      ],
+      "editAfterFailoverRenderedEverywhere": true
+    },
+    "crash": {
+      "editsDuringRun": 90,
+      "failovers": [
+        {
+          "round": 1,
+          "leaderTabsLeft": 1,
+          "newLeaderStreamOpenMs": 16,
+          "newLeaderReadyMs": 23
+        }
+      ],
+      "survivors": 1,
+      "versionsVsServer": [
+        {
+          "missing": 0,
+          "stale": 0
+        }
+      ],
+      "editAfterFailoverRenderedEverywhere": true
+    }
+  }
+}

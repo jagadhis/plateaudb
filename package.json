@@ -1,0 +1,11 @@
+{
+  "name": "plateau-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "plateau: a browser database whose query time plateaus as data grows",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ]
+}
