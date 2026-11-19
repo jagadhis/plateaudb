@@ -52,20 +52,20 @@
   <section id="status" class="band">
     <div class="wrap">
       <h2>Where it stands</h2>
-      <p class="section-lede">An experiment, built in public milestones with a written pass/fail rule before every run. The engine and the IndexedDB-compatible API work end to end in Chromium and WebKit. It is on npm as <code>plateaudb</code> 0.1.0 under the MIT licence; it is pre-1.0 and not yet proven on production data.</p>
+      <p class="section-lede">An experiment, built in public milestones with a written pass/fail rule before every run. The engine and the IndexedDB-compatible API work end to end in Chromium, WebKit and Firefox. It is on npm as <code>plateaudb</code> under the MIT licence; it is pre-1.0 and not yet proven on production data.</p>
 
       <div class="status-grid">
         <div class="card">
           <h3><span class="dot dot-ok"></span>Works today</h3>
           <ul>
             <li>IndexedDB-compatible API: databases, object stores, indexes, key ranges, cursors, transactions, events.</li>
-            <li>Conformance: <strong>84 of 85</strong> WPT-style tests pass in Chromium and WebKit; native IndexedDB passes 85. The one gap: a key stored as <code>-0</code> comes back as <code>0</code>.</li>
+            <li>Conformance: <strong>87 of 87</strong> WPT-style tests pass in Chromium, WebKit and Firefox, including a key stored as <code>-0</code>, which comes back as <code>-0</code> (from 0.3.0). Native IndexedDB passes 87 in Chromium and WebKit, 84 in Firefox.</li>
             <li>Multi-key queries with <code>store.query({where, orderBy, limit, count})</code> on declared typed columns.</li>
             <li>Lazy, paged open: a 1M-row database opens without reading the file.</li>
             <li>Put, delete and compaction, crash-safe: a crash test over 1,410 tear points passes.</li>
             <li>Memory budget with eviction: default 64 MiB, 24 MiB on low-memory devices.</li>
             <li>No special server headers (no COOP/COEP); the worker and WASM start themselves.</li>
-            <li>From 0.2.0: where OPFS, module workers or WebAssembly are missing, or in a WebKit ephemeral session, it runs on the browser's own IndexedDB (85 of 85 conformance tests), and <code>plateau.backend</code> says which one runs.</li>
+            <li>From 0.2.0: where OPFS, module workers or WebAssembly are missing, or in a WebKit ephemeral session, it runs on the browser's own IndexedDB (conformance matches it: 87 of 87 in Chromium and WebKit, 84 of 87 in Firefox), and <code>plateau.backend</code> says which one runs.</li>
             <li>Several tabs at once: one tab runs the worker, the others forward to it; when that tab closes another takes over within about 15 ms, and no committed write is lost. <code>versionchange</code> and <code>blocked</code> reach every tab as natively.</li>
           </ul>
         </div>
@@ -74,7 +74,8 @@
           <ul>
             <li>Blob, File, ImageData and Error values throw <code>DataCloneError</code>.</li>
             <li>A fresh page load through the API is about 2x slower than native IndexedDB (6-10 ms against 3-5 ms).</li>
-            <li>Firefox is not measured: Playwright's Firefox does not launch on the test Mac.</li>
+            <li>In Firefox, on the IndexedDB fallback, a <code>-0</code> key comes back as <code>0</code> and a held-up open sometimes gets no <code>blocked</code> event, as in Firefox's own IndexedDB.</li>
+            <li>A store that holds a <code>-0</code> key written by 0.3.0 cannot be read by 0.2.0: no downgrade.</li>
             <li>Pre-1.0: the API may change between minor versions.</li>
           </ul>
         </div>
@@ -288,7 +289,7 @@ bun server.ts --orders 1000 --poll-ms 1000
           </thead>
           <tbody>
             <tr><th>API</th><td class="hi">IndexedDB, plus <code>store.query</code></td><td>IndexedDB</td><td>Wrapper over IndexedDB</td><td>SQL</td><td>SQL (Postgres)</td><td>Document queries</td></tr>
-            <tr><th>Drop-in for IndexedDB code</th><td class="hi yes">Yes, 84/85 conformance</td><td class="yes">It is the standard</td><td class="no">No, its own API</td><td class="no">No</td><td class="no">No</td><td class="no">No</td></tr>
+            <tr><th>Drop-in for IndexedDB code</th><td class="hi yes">Yes, 87/87 conformance</td><td class="yes">It is the standard</td><td class="no">No, its own API</td><td class="no">No</td><td class="no">No</td><td class="no">No</td></tr>
             <tr><th>Storage</th><td class="hi">OPFS</td><td>Browser-managed (LevelDB or SQLite in Chrome, SQLite in Safari)</td><td>Native IndexedDB</td><td>OPFS</td><td>OPFS or IndexedDB</td><td>OPFS</td></tr>
             <tr><th>Multi-key query</th><td class="hi">Bitmap intersection over every declared field; ordered walk inside a group</td><td>One index; a compound index only through its leading parts</td><td>Compound index or in-memory filter; <code>or()</code> runs branches separately</td><td>SQLite planner over B-tree indexes</td><td>Postgres planner</td><td>One index, the rest filtered in memory</td></tr>
             <tr><th>Engine runs in</th><td class="hi">Dedicated worker</td><td>Browser's own process</td><td>Main thread over IndexedDB</td><td>Dedicated worker</td><td>Worker for OPFS</td><td>Worker</td></tr>
@@ -400,7 +401,7 @@ bun server.ts --orders 1000 --poll-ms 1000
         </div>
         <div class="card">
           <h3>One machine, two browsers</h3>
-          <p>Every number here comes from one Apple M5 Max, headless, with a warm OS file cache. Firefox is not measured yet, and no phone has been measured.</p>
+          <p>Every number here comes from one Apple M5 Max, headless, with a warm OS file cache. The benchmark numbers are from Chromium and WebKit; Firefox runs the conformance and multi-tab tests but is not benchmarked yet, and no phone has been measured.</p>
         </div>
         <div class="card">
           <h3>Generic stores are slower</h3>

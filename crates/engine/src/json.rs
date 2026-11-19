@@ -5,10 +5,12 @@ pub fn write_u32(out: &mut String, v: u32) {
 }
 
 /// Integral values below 2^53 print without a fraction; non-finite values print as `null`,
-/// as `JSON.stringify` does.
+/// as `JSON.stringify` does. -0 prints as `-0`, which `JSON.parse` reads back as -0.
 pub fn write_f64(out: &mut String, v: f64) {
     if !v.is_finite() {
         out.push_str("null");
+    } else if v == 0.0 && v.is_sign_negative() {
+        out.push_str("-0");
     } else if v.fract() == 0.0 && v.abs() < 9_007_199_254_740_992.0 {
         out.push_str(itoa::Buffer::new().format(v as i64));
     } else {
@@ -66,5 +68,10 @@ mod tests {
         let mut out = String::new();
         write_f64(&mut out, f64::NAN);
         assert_eq!(out, "null");
+        let mut out = String::new();
+        write_f64(&mut out, -0.0);
+        assert_eq!(out, "-0");
+        let back: f64 = serde_json::from_str(&out).unwrap();
+        assert!(back == 0.0 && back.is_sign_negative());
     }
 }

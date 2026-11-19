@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cmp, decodeKey, encodeKey, extractKey, indexKeys, PlateauKeyRange, skipKey, validKeyPath, type Key } from "../src/key";
+import { cmp, decodeKey, encodeKey, extractKey, indexKeys, PlateauKeyRange, skipKey, spelledKey, validKeyPath, type Key } from "../src/key";
 
 /** IndexedDB's key comparison, written straight from the spec, for checking the encoding. */
 function specCmp(a: Key, b: Key): number {
@@ -196,9 +196,32 @@ describe("key paths and ranges", () => {
     expect(extractKey(v, "a")).toBe("invalid");
     expect(extractKey(v, ["a.b", "s"])).toEqual({ key: encodeKey([3, "str"])! });
     expect(extractKey(v, ["a.b", "nope"])).toBe("invalid");
-    expect(indexKeys(v, "arr", true).sort()).toEqual([encodeKey(1)!, encodeKey(2)!, encodeKey("x")!].sort());
+    expect(indexKeys(v, "arr", true).map((e) => e.k).sort()).toEqual([encodeKey(1)!, encodeKey(2)!, encodeKey("x")!].sort());
     expect(indexKeys(v, "arr", false)).toEqual([]);
-    expect(indexKeys(v, "d", true)).toEqual([encodeKey(new Date(5))!]);
+    expect(indexKeys(v, "d", true)).toEqual([{ k: encodeKey(new Date(5))! }]);
+  });
+
+  test("-0 is the key 0, spelled apart", () => {
+    expect(encodeKey(-0)).toBe(encodeKey(0)!);
+    expect(spelledKey(0)).toBeUndefined();
+    expect(spelledKey([1, "a", [0]])).toBeUndefined();
+    expect(Object.is(decodeKey(spelledKey(-0)!), -0)).toBe(true);
+    const arr = decodeKey(spelledKey([1, [-0, 0], -0])!) as unknown[];
+    expect(Object.is((arr[1] as number[])[0], -0) && Object.is((arr[1] as number[])[1], 0) && Object.is(arr[2], -0)).toBe(true);
+    // Same length as the encoding, so an index entry splits at the same place.
+    expect(spelledKey([-0, "x"])!.length).toBe(encodeKey([0, "x"])!.length);
+    expect(skipKey(spelledKey([-0, "x"])!, 0)).toBe(encodeKey([0, "x"])!.length);
+    expect(extractKey({ a: -0 }, "a")).toEqual({ key: encodeKey(0)!, sk: spelledKey(-0)! });
+    expect(extractKey({ a: 0 }, "a")).toEqual({ key: encodeKey(0)! });
+    // multiEntry keeps one entry per key, spelled as its first occurrence.
+    expect(indexKeys({ m: [-0, 0, 1] }, "m", true)).toEqual([{ k: encodeKey(0)!, sk: spelledKey(-0)! }, { k: encodeKey(1)! }]);
+    expect(indexKeys({ m: [0, -0] }, "m", true)).toEqual([{ k: encodeKey(0)! }]);
+    expect(Object.is(PlateauKeyRange.only(-0).lower, -0)).toBe(true);
+    expect(Object.is(PlateauKeyRange.bound(-0, 0).upper, 0)).toBe(true);
+    expect(PlateauKeyRange.only(-0).includes(0)).toBe(true);
+    const cyclic: unknown[] = [];
+    cyclic.push(cyclic);
+    expect(spelledKey(cyclic)).toBeUndefined();
   });
 
   test("ranges", () => {

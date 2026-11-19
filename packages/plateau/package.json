@@ -1,6 +1,6 @@
 {
   "name": "plateaudb",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "A browser database on OPFS with an IndexedDB-compatible API, written in Rust and compiled to WebAssembly; multi-key query time stays near-flat as rows grow",
   "license": "MIT",

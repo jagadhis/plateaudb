@@ -18,6 +18,11 @@
 // Every encoding is self-delimiting, so no encoding is a proper prefix of another: two encodings
 // concatenated (an index key, then a primary key) sort by the first and then by the second, and an
 // entry starts with an encoded key k exactly when its first key equals k.
+//
+// -0 and 0 are one key, so they share one encoding. The spelling of a key holding -0 is kept
+// apart: `spelledKey` gives the raw encoding, the same except that each -0 keeps its own order key
+// (every bit of -0's flipped, just below 0's), which `decodeKey` turns back into -0. The raw
+// encoding is only ever decoded, never compared.
 
 export type Key = number | string | Date | ArrayBuffer | Key[];
 
@@ -33,8 +38,8 @@ const LITTLE = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 const HI = LITTLE ? 1 : 0;
 const LO = LITTLE ? 0 : 1;
 
-function encodeNumber(tag: number, n: number): string {
-  f64[0] = n === 0 ? 0 : n;
+function encodeNumber(tag: number, n: number, raw = false): string {
+  f64[0] = n === 0 && !raw ? 0 : n;
   let hi = u32[HI];
   let lo = u32[LO];
   if (hi >>> 31) {
@@ -74,13 +79,28 @@ function isDate(v: unknown): v is Date {
 
 /** The sortable encoding of `v` if it is a valid key, else `undefined`. */
 export function encodeKey(v: unknown): string | undefined {
-  return enc(v, null);
+  return enc(v, null, false);
 }
 
-function enc(v: unknown, seen: unknown[] | null): string | undefined {
+/** The raw encoding of a valid key that holds -0 (as a number or inside an array), else
+ * `undefined`: the key is spelled as its encoding says. */
+export function spelledKey(v: unknown): string | undefined {
+  return holdsNegZero(v, []) ? enc(v, null, true) : undefined;
+}
+
+function holdsNegZero(v: unknown, seen: unknown[]): boolean {
+  if (typeof v === "number") return Object.is(v, -0);
+  if (!Array.isArray(v) || seen.includes(v)) return false;
+  seen.push(v);
+  for (let i = 0; i < v.length; i++) if (holdsNegZero(v[i], seen)) return true;
+  seen.pop();
+  return false;
+}
+
+function enc(v: unknown, seen: unknown[] | null, raw: boolean): string | undefined {
   switch (typeof v) {
     case "number":
-      return Number.isNaN(v) ? undefined : encodeNumber(NUMBER, v);
+      return Number.isNaN(v) ? undefined : encodeNumber(NUMBER, v, raw);
     case "string": {
       let out = String.fromCharCode(STRING);
       let from = 0;
@@ -114,7 +134,7 @@ function enc(v: unknown, seen: unknown[] | null): string | undefined {
         let out = String.fromCharCode(ARRAY);
         for (let i = 0; i < v.length; i++) {
           if (!Object.prototype.hasOwnProperty.call(v, i)) return undefined;
-          const e = enc(v[i], stack);
+          const e = enc(v[i], stack, raw);
           if (e === undefined) return undefined;
           out += e;
         }
@@ -277,46 +297,62 @@ function evalPath(value: unknown, path: string): unknown {
   return v;
 }
 
-/** What evaluating a key path on a value gives: `{ key }` (the encoding of a valid key), `"invalid"`
- * (a value that is not a key) or `"missing"` (no value at the path). An array key path gives an
- * array key, or `"invalid"` if any part is missing or invalid. */
-export function extractKey(value: unknown, path: KeyPath): { key: string } | "invalid" | "missing" {
+/** What evaluating a key path on a value gives: `{ key }` (the encoding of a valid key, and `sk`, its
+ * raw encoding, when it holds -0), `"invalid"` (a value that is not a key) or `"missing"` (no value
+ * at the path). An array key path gives an array key, or `"invalid"` if any part is missing or
+ * invalid. */
+export function extractKey(value: unknown, path: KeyPath): { key: string; sk?: string } | "invalid" | "missing" {
+  let v: unknown;
   if (Array.isArray(path)) {
     const parts: unknown[] = [];
     for (const p of path) {
-      const v = evalPath(value, p);
-      if (v === FAIL) return "invalid";
-      parts.push(v);
+      const x = evalPath(value, p);
+      if (x === FAIL) return "invalid";
+      parts.push(x);
     }
-    const key = encodeKey(parts);
-    return key === undefined ? "invalid" : { key };
+    v = parts;
+  } else {
+    v = evalPath(value, path);
+    if (v === FAIL) return "missing";
   }
-  const v = evalPath(value, path);
-  if (v === FAIL) return "missing";
   const key = encodeKey(v);
-  return key === undefined ? "invalid" : { key };
+  if (key === undefined) return "invalid";
+  const sk = spelledKey(v);
+  return sk === undefined ? { key } : { key, sk };
+}
+
+/** An index key of a record: its encoding, and its raw encoding when it holds -0. */
+export interface SpelledKey {
+  k: string;
+  sk?: string;
 }
 
 /** The keys an index with this key path holds for a record: none, one, or (multiEntry over an
- * array value) each distinct valid element. */
-export function indexKeys(value: unknown, path: KeyPath, multiEntry: boolean): string[] {
+ * array value) each distinct valid element, spelled as its first occurrence. */
+export function indexKeys(value: unknown, path: KeyPath, multiEntry: boolean): SpelledKey[] {
+  const one = (x: unknown): SpelledKey | undefined => {
+    const k = encodeKey(x);
+    if (k === undefined) return undefined;
+    const sk = spelledKey(x);
+    return sk === undefined ? { k } : { k, sk };
+  };
   if (multiEntry && typeof path === "string") {
     const v = evalPath(value, path);
     if (v === FAIL) return [];
     if (Array.isArray(v)) {
-      const out = new Set<string>();
+      const out = new Map<string, SpelledKey>();
       for (let i = 0; i < v.length; i++) {
         if (!Object.prototype.hasOwnProperty.call(v, i)) continue;
-        const k = encodeKey(v[i]);
-        if (k !== undefined) out.add(k);
+        const e = one(v[i]);
+        if (e !== undefined && !out.has(e.k)) out.set(e.k, e);
       }
-      return [...out];
+      return [...out.values()];
     }
-    const k = encodeKey(v);
-    return k === undefined ? [] : [k];
+    const e = one(v);
+    return e === undefined ? [] : [e];
   }
   const r = extractKey(value, path);
-  return typeof r === "object" ? [r.key] : [];
+  return typeof r === "object" ? [r.sk === undefined ? { k: r.key } : { k: r.key, sk: r.sk }] : [];
 }
 
 /** Whether a generated key could be put at `path` in `value` (every step before the last is an
@@ -367,36 +403,41 @@ export class PlateauKeyRange {
   /** @internal */ readonly hi: string | undefined;
   readonly lowerOpen: boolean;
   readonly upperOpen: boolean;
+  /** The raw encodings of bounds that hold -0, kept only to hand them back. */
+  readonly #slo: string | undefined;
+  readonly #shi: string | undefined;
 
-  private constructor(lo: string | undefined, hi: string | undefined, lowerOpen: boolean, upperOpen: boolean) {
+  private constructor(lo: string | undefined, hi: string | undefined, lowerOpen: boolean, upperOpen: boolean, lower?: unknown, upper?: unknown) {
     this.lo = lo;
     this.hi = hi;
     this.lowerOpen = lowerOpen;
     this.upperOpen = upperOpen;
+    this.#slo = lo === undefined ? undefined : spelledKey(lower);
+    this.#shi = hi === undefined ? undefined : spelledKey(upper);
   }
 
   get lower(): Key | undefined {
-    return this.lo === undefined ? undefined : decodeKey(this.lo);
+    return this.lo === undefined ? undefined : decodeKey(this.#slo ?? this.lo);
   }
 
   get upper(): Key | undefined {
-    return this.hi === undefined ? undefined : decodeKey(this.hi);
+    return this.hi === undefined ? undefined : decodeKey(this.#shi ?? this.hi);
   }
 
   static only(value: unknown): PlateauKeyRange {
     if (nativeRanges) return IDBKeyRange.only(value) as unknown as PlateauKeyRange;
     const k = requireKey(value);
-    return new PlateauKeyRange(k, k, false, false);
+    return new PlateauKeyRange(k, k, false, false, value, value);
   }
 
   static lowerBound(lower: unknown, open = false): PlateauKeyRange {
     if (nativeRanges) return IDBKeyRange.lowerBound(lower, open) as unknown as PlateauKeyRange;
-    return new PlateauKeyRange(requireKey(lower), undefined, !!open, true);
+    return new PlateauKeyRange(requireKey(lower), undefined, !!open, true, lower);
   }
 
   static upperBound(upper: unknown, open = false): PlateauKeyRange {
     if (nativeRanges) return IDBKeyRange.upperBound(upper, open) as unknown as PlateauKeyRange;
-    return new PlateauKeyRange(undefined, requireKey(upper), true, !!open);
+    return new PlateauKeyRange(undefined, requireKey(upper), true, !!open, undefined, upper);
   }
 
   static bound(lower: unknown, upper: unknown, lowerOpen = false, upperOpen = false): PlateauKeyRange {
@@ -404,7 +445,7 @@ export class PlateauKeyRange {
     const lo = requireKey(lower);
     const hi = requireKey(upper);
     if (lo > hi || (lo === hi && (lowerOpen || upperOpen))) throw dataError("The lower key is greater than the upper key.");
-    return new PlateauKeyRange(lo, hi, !!lowerOpen, !!upperOpen);
+    return new PlateauKeyRange(lo, hi, !!lowerOpen, !!upperOpen, lower, upper);
   }
 
   includes(key: unknown): boolean {

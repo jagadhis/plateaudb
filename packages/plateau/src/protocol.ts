@@ -49,10 +49,11 @@ export type Op =
   /** Point gets of a store by encoded key; one result per key. */
   | { o: "get"; s: string; ks: string[] }
   /** First record (or key) in a range, of a store or an index. */
+  /** As keys (`key`), the results are raw encodings where a key holds -0: they are only decoded. */
   | { o: "first"; s: string; i?: string; r: WireRange; key: boolean }
   | { o: "all"; s: string; i?: string; r: WireRange | null; n: number; key: boolean }
   | { o: "count"; s: string; i?: string; r: WireRange | null }
-  /** Puts; one result per row (its encoded key). `t` holds a typed store's declared fields in
+  /** Puts; one result per row (its encoded key, raw where it holds -0). `t` holds a typed store's declared fields in
    * column order; `v` the stored form of the rest of the value (or of the whole value). */
   | { o: "put"; s: string; rows: PutRow[] }
   /** Puts into a typed store, as columns: per declared column a Float64Array (f64), Uint32Array
@@ -76,15 +77,20 @@ export type Op =
 
 export interface PutRow {
   k?: string;
+  /** The key's raw encoding, when it holds -0 (`spelledKey`). */
+  sk?: string;
   v: string;
   t?: unknown[];
   add: boolean;
 }
 
-/** A cursor step's answer: encoded key, encoded primary key, value if asked. */
+/** A cursor step's answer: encoded key, encoded primary key, value if asked. `sk` and `sp` are their
+ * raw encodings, where they hold -0, to decode; `k` and `p` are what positions compare. */
 export interface CursorHit {
   k: string;
   p: string;
+  sk?: string;
+  sp?: string;
   v?: unknown;
   /** Prefetched next steps, in order. */
   more?: CursorHit[];
