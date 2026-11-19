@@ -27,7 +27,7 @@
 // opening a database that still has an intent reopens those files at the recorded sequence.
 
 import { Db, cachedBytes, initSync, memoryBudget, setMemoryBudget } from "plateau-engine";
-import { decodeKey, encodeNumberKey, encodedNumber, indexKeys, injectKey, skipKey, type WireRange } from "./key";
+import { decodeKey, encodeNumberKey, encodedNumber, indexKeys, injectKey, skipKey, spelledKey, type SpelledKey, type WireRange } from "./key";
 import type { CallMessage, CallReply, Catalog, ColumnDecl, CursorHit, IndexDef, MemoryStats, Op, PutRow, StoreDef, TxMessage, TxReply } from "./protocol";
 import { decodeValue, encodeValue } from "./value";
 
@@ -145,6 +145,13 @@ function removeFile(dir: FileSystemDirectoryHandle, name: string): Promise<void>
 // ASCII: each 16-bit code unit as three digits of a 41-character alphabet in ascending byte order,
 // so byte order is key order, and a string column's keys index serves it. A space separates the
 // keys of one row; "~" sorts above every digit, " " below.
+//
+// A key that holds -0 is stored as its encoding, then "!" and its raw encoding (`spelledKey`), so it
+// can be handed back as -0. "!" sorts below every digit, so the entry still sorts, matches and
+// counts as its encoding does; a bound just past an entry is '"', above "!" and below every digit.
+// Files without -0 keys hold no "!", as before.
+const SPELL = "!";
+const PAST = '"';
 const DIG = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcde";
 const DIGV = new Uint8Array(128);
 for (let i = 0; i < DIG.length; i++) DIGV[DIG.charCodeAt(i)] = i;
@@ -168,22 +175,44 @@ function undigits(d: string): string {
   return s;
 }
 
+/** The stored form of an entry: its encoding `e`, spelled by `raw` where it holds -0. */
+function stored(e: string, raw: string | undefined): string {
+  return raw === undefined ? digits(e) : digits(e) + SPELL + digits(raw);
+}
+
+/** A stored entry's encoding, and its raw encoding where it is spelled. */
+function unstored(d: string): [string, string | undefined] {
+  const at = d.indexOf(SPELL);
+  return at < 0 ? [undigits(d), undefined] : [undigits(d.slice(0, at)), undigits(d.slice(at + 1))];
+}
+
+/** An index entry: index key, then primary key, spelled where either holds -0. */
+function indexEntry(ik: SpelledKey, pk: string, spk: string | undefined): string {
+  return stored(ik.k + pk, ik.sk === undefined && spk === undefined ? undefined : (ik.sk ?? ik.k) + (spk ?? pk));
+}
+
+/** The raw encoding of the number key -0. */
+const NEG_ZERO = spelledKey(-0)!;
+
 /** A lower bound on entries (sortable strings): at or above `s`, above it, or above every entry
  * that starts with the key `s`. */
 type Lo = { s: string; m: "ge" | "gt" | "after" };
 /** An upper bound: below `s`, at or below it, or through every entry that starts with `s`. */
 type Hi = { s: string; m: "lt" | "le" | "through" };
 
-const loDigits = (b: Lo | null) => (b === null ? "" : digits(b.s) + (b.m === "ge" ? "" : b.m === "gt" ? " " : "~"));
-const hiDigits = (b: Hi | null) => (b === null ? undefined : digits(b.s) + (b.m === "lt" ? "" : b.m === "le" ? " " : "~"));
+const loDigits = (b: Lo | null) => (b === null ? "" : digits(b.s) + (b.m === "ge" ? "" : b.m === "gt" ? PAST : "~"));
+const hiDigits = (b: Hi | null) => (b === null ? undefined : digits(b.s) + (b.m === "lt" ? "" : b.m === "le" ? PAST : "~"));
 const rangeLo = (r: WireRange | null): Lo | null => (r && r.lo !== undefined ? { s: r.lo, m: r.loOpen ? "after" : "ge" } : null);
 const rangeHi = (r: WireRange | null): Hi | null => (r && r.hi !== undefined ? { s: r.hi, m: r.hiOpen ? "lt" : "through" } : null);
 
-/** An index or store entry: key, primary key (sortable strings), and the engine row id. */
+/** An index or store entry: key, primary key (sortable strings), and the engine row id; `sk` and
+ * `sp` are the raw encodings of a key and primary key that hold -0. */
 interface Ent {
   k: string;
   p: string;
   rid: number;
+  sk?: string;
+  sp?: string;
 }
 
 interface Meta {
@@ -315,19 +344,25 @@ class StoreHost {
     const col = ix === null ? "_k" : `_i${ix.id}`;
     const text = this.engine.keyScan(col, loDigits(lo), hiDigits(hi), desc, Math.min(limit, 0xffffffff));
     if (!text) return [];
-    return text.split("\n").map((line) => {
+    return text.split("\n").map((line): Ent => {
       const tab = line.indexOf("\t");
-      const e = undigits(line.slice(0, tab));
+      const [e, raw] = unstored(line.slice(0, tab));
       const rid = Number(line.slice(tab + 1));
-      if (ix === null) return { k: e, p: e, rid };
+      if (ix === null) return raw === undefined ? { k: e, p: e, rid } : { k: e, p: e, rid, sk: raw, sp: raw };
       const kl = skipKey(e, 0);
-      return { k: e.slice(0, kl), p: e.slice(kl), rid };
+      const ent: Ent = { k: e.slice(0, kl), p: e.slice(kl), rid };
+      if (raw !== undefined) {
+        // A raw encoding has the same length as the encoding it spells.
+        if (raw.slice(0, kl) !== ent.k) ent.sk = raw.slice(0, kl);
+        if (raw.slice(kl) !== ent.p) ent.sp = raw.slice(kl);
+      }
+      return ent;
     });
   }
 
   /** A typed store's primary key order: the engine's own f64 primary key. Keys of other types
-   * sort above every number. */
-  scanNumbers(lo: Lo | null, hi: Hi | null, desc: boolean, limit: number): Ent[] {
+   * sort above every number. The key 0 is spelled as its record holds it (`spell`). */
+  scanNumbers(lo: Lo | null, hi: Hi | null, desc: boolean, limit: number, spell = true): Ent[] {
     let l = -Infinity;
     let lOpen = false;
     let h = Infinity;
@@ -346,15 +381,21 @@ class StoreHost {
       }
     }
     const keys = this.engine.pkScan(l, lOpen, h, hOpen, desc, Math.min(limit, 0xffffffff));
-    return Array.from(keys, (n) => {
+    const ents = Array.from(keys, (n): Ent => {
       const k = encodeNumberKey(n);
       return { k, p: k, rid: n };
     });
+    const zero = spell ? keys.indexOf(0) : -1;
+    if (zero >= 0) {
+      const [row] = JSON.parse(this.engine.getMany(Float64Array.of(0))) as (Record<string, unknown> | null)[];
+      if (row && Object.is(row[this.def.keyPath as string], -0)) ents[zero].sk = ents[zero].sp = NEG_ZERO;
+    }
+    return ents;
   }
 
   count(ix: IndexDef | null, r: WireRange | null): number {
     this.flush();
-    if (ix === null && this.typed) return r === null ? this.engine.len() : this.scanNumbers(rangeLo(r), rangeHi(r), false, Infinity).length;
+    if (ix === null && this.typed) return r === null ? this.engine.len() : this.scanNumbers(rangeLo(r), rangeHi(r), false, Infinity, false).length;
     return this.engine.keyCount(ix === null ? "_k" : `_i${ix.id}`, loDigits(rangeLo(r)), hiDigits(rangeHi(r)));
   }
 
@@ -369,7 +410,7 @@ class StoreHost {
     const r = this.pending.byPk.get(pk);
     if (r !== undefined) return r;
     const d = digits(pk);
-    const text = this.engine.keyScan("_k", d, d + " ", false, 1);
+    const text = this.engine.keyScan("_k", d, d + PAST, false, 1);
     return text ? Number(text.slice(text.indexOf("\t") + 1)) : undefined;
   }
 
@@ -386,19 +427,19 @@ class StoreHost {
     }
   }
 
-  /** A record's index keys per index (sortable strings), checked against unique indexes. */
-  indexKeysOf(value: unknown, pk: string): string[][] {
+  /** A record's index keys per index, checked against unique indexes. */
+  indexKeysOf(value: unknown, pk: string): SpelledKey[][] {
     return this.def.indexes.map((ix) => {
       const keys = indexKeys(value, ix.keyPath, ix.multiEntry);
       if (ix.unique) {
         const mine = this.pending.unique.get(ix.id);
-        for (const ik of keys) {
+        for (const { k: ik } of keys) {
           const other = mine?.get(ik);
           if (other !== undefined && other !== pk) throw new IdbError("ConstraintError", `Unique index ${ix.name} already holds this key.`);
           const d = digits(ik);
           const text = this.engine.keyScan(`_i${ix.id}`, d, d + "~", false, 2);
           for (const line of text ? text.split("\n") : []) {
-            const e = undigits(line.slice(0, line.indexOf("\t")));
+            const [e] = unstored(line.slice(0, line.indexOf("\t")));
             if (e.slice(skipKey(e, 0)) !== pk) throw new IdbError("ConstraintError", `Unique index ${ix.name} already holds this key.`);
           }
         }
@@ -433,7 +474,7 @@ class StoreHost {
     }
     const old = this.ridOf(k);
     if (row.add && old !== undefined) throw new IdbError("ConstraintError", "A record with this key already exists.");
-    let ix: string[][] = [];
+    let ix: SpelledKey[][] = [];
     if (def.indexes.length) {
       if (value === undefined) value = this.typed ? this.typedValue(t!, v) : decodeValue(v);
       ix = this.indexKeysOf(value, k);
@@ -453,11 +494,11 @@ class StoreHost {
       if (!x.unique) return;
       let m = p.unique.get(x.id);
       if (!m) p.unique.set(x.id, (m = new Map()));
-      for (const ik of ix[i]) m.set(ik, k!);
+      for (const ik of ix[i]) m.set(ik.k, k!);
     });
-    const dk = this.typed ? "" : digits(k);
-    p.rows.push({ rid, k: dk, v, t, ix: ix.map((keys) => keys.map((ik) => digits(ik) + (dk || digits(k!))).join(" ")) });
-    return k;
+    const sk = generated ? undefined : row.sk;
+    p.rows.push({ rid, k: this.typed ? "" : stored(k, sk), v, t, ix: ix.map((keys) => keys.map((ik) => indexEntry(ik, k!, sk)).join(" ")) });
+    return sk ?? k;
   }
 
   /** A typed batch of puts: straight to the engine when nothing needs a per-row decision, else
@@ -493,7 +534,10 @@ class StoreHost {
     for (let i = 0; i < op.n; i++) {
       const t = cols.map((c, ci) => wireAt(c, op.cols[ci], i));
       const row: PutRow = { v: op.v ? op.v[i] : "", t, add: adds.has(i) };
-      if (!gens.has(i)) row.k = encodeNumberKey(keys[i]);
+      if (!gens.has(i)) {
+        row.k = encodeNumberKey(keys[i]);
+        if (Object.is(keys[i], -0)) row.sk = NEG_ZERO;
+      }
       try {
         const k = this.put(row);
         res.push(gens.has(i) ? k : undefined);
@@ -534,6 +578,14 @@ class StoreHost {
   values(ents: Ent[]): unknown[] {
     return this.fetch(ents.map((e) => e.rid));
   }
+}
+
+/** An entry as a cursor step hands it back. */
+function hitOf(e: Ent): CursorHit {
+  const h: CursorHit = { k: e.k, p: e.p };
+  if (e.sk !== undefined) h.sk = e.sk;
+  if (e.sp !== undefined) h.sp = e.sp;
+  return h;
 }
 
 const ASCII = /^[\x00-\x7f]*$/;
@@ -790,13 +842,13 @@ class DatabaseHost {
         const ix = op.i === undefined ? null : s.index(op.i);
         const [e] = s.scan(ix, rangeLo(op.r), rangeHi(op.r), false, 1);
         if (!e) return undefined;
-        return op.key ? e.p : s.values([e])[0];
+        return op.key ? (e.sp ?? e.p) : s.values([e])[0];
       }
       case "all": {
         const s = this.store(op.s);
         const ix = op.i === undefined ? null : s.index(op.i);
         const ents = s.scan(ix, rangeLo(op.r), rangeHi(op.r), false, op.n > 0 ? op.n : Infinity);
-        return op.key ? ents.map((e) => e.p) : s.values(ents);
+        return op.key ? ents.map((e) => e.sp ?? e.p) : s.values(ents);
       }
       case "recs": {
         const s = this.store(op.s);
@@ -811,7 +863,7 @@ class DatabaseHost {
           if (op.n > 0) ents = ents.slice(0, op.n);
         }
         const vals = s.values(ents);
-        return ents.map((e, i) => ({ k: e.k, p: e.p, v: vals[i] }));
+        return ents.map((e, i) => ({ ...hitOf(e), v: vals[i] }));
       }
       case "count": {
         const s = this.store(op.s);
@@ -890,11 +942,11 @@ class DatabaseHost {
           const t = cols.map((c) => v[c.name]);
           const rest: Record<string, unknown> = {};
           for (const key of Object.keys(v)) if (!cols.some((c) => c.name === key)) rest[key] = v[key];
-          s.put({ k: ents[i].p, v: Object.keys(rest).length ? encodeValue(rest) : "", t, add: false });
+          s.put({ k: ents[i].p, sk: ents[i].sp, v: Object.keys(rest).length ? encodeValue(rest) : "", t, add: false });
         } else {
           const rid = ents[i].rid;
-          const ix = s.indexKeysOf(v, ents[i].p);
-          const dk = digits(ents[i].p);
+          const { p: pk, sp } = ents[i];
+          const ix = s.indexKeysOf(v, pk);
           if (s.pending.keys.has(rid)) s.flush();
           s.pending.keys.add(rid);
           s.pending.byPk.set(ents[i].p, rid);
@@ -902,9 +954,9 @@ class DatabaseHost {
             if (!x.unique) return;
             let mm = s.pending.unique.get(x.id);
             if (!mm) s.pending.unique.set(x.id, (mm = new Map()));
-            for (const ik of ix[j]) mm.set(ik, ents[i].p);
+            for (const ik of ix[j]) mm.set(ik.k, pk);
           });
-          s.pending.rows.push({ rid, k: dk, v: encodeValue(v), ix: ix.map((keys) => keys.map((ik) => digits(ik) + dk).join(" ")) });
+          s.pending.rows.push({ rid, k: stored(pk, sp), v: encodeValue(v), ix: ix.map((keys) => keys.map((ik) => indexEntry(ik, pk, sp)).join(" ")) });
         }
         if (s.pending.rows.length >= 10000) s.flush();
       }
@@ -965,12 +1017,12 @@ class DatabaseHost {
       if (!found) return null;
       at = hit = found;
     }
-    const out: CursorHit = { k: hit!.k, p: hit!.p };
+    const out: CursorHit = hitOf(hit!);
     if (op.v) out.v = s.values([hit!])[0];
     if (op.pre && (op.d === "next" || op.d === "prev")) {
       const more = op.d === "next" ? s.scan(ix, { s: entry(hit!), m: "gt" }, hi0, false, op.pre) : s.scan(ix, lo0, { s: entry(hit!), m: "lt" }, true, op.pre);
       const vals = op.v ? s.values(more) : [];
-      out.more = more.map((e, i) => (op.v ? { k: e.k, p: e.p, v: vals[i] } : { k: e.k, p: e.p }));
+      out.more = more.map((e, i) => (op.v ? { ...hitOf(e), v: vals[i] } : hitOf(e)));
     }
     return out;
   }

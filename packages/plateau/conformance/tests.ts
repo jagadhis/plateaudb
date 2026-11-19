@@ -446,6 +446,74 @@ promise_test("keys: -0 equals 0, and a record stored under -0 reports its key as
   assert_true(Object.is(keys[0], -0), "the stored key -0 comes back as -0");
 });
 
+const assert_neg0 = (v: unknown, msg: string) => assert_true(Object.is(v, -0), `${msg}: expected -0`);
+
+promise_test("keys: -0 at a key path, inside an array key and as an index key comes back as -0", async (t, env) => {
+  const db = await openDb(t, env, (db) => {
+    const s = db.createObjectStore("s", { keyPath: "id" });
+    s.createIndex("x", "x");
+    s.createIndex("m", "m", { multiEntry: true });
+    s.put({ id: -0, x: -0, m: [-0, 2] });
+    s.put({ id: 1, x: [-0, "a"], m: [] });
+    db.createObjectStore("o").put("v", [-0, "a"]);
+  });
+  const tx = db.transaction(["s", "o"]);
+  const s = tx.objectStore("s");
+  assert_neg0((await req<unknown[]>(s.getAllKeys()))[0], "store getAllKeys");
+  // A range, not the key 0: Chromium's getKey(0) hands back the key it was asked for.
+  const around0 = env.KeyRange.bound(-1, 1);
+  assert_neg0(await req(s.getKey(around0)), "store getKey");
+  assert_neg0((await req<{ id: number }>(s.get(0))).id, "the value");
+  const c = await req<IDBCursorWithValue>(s.openCursor());
+  assert_neg0(c.key, "store cursor key");
+  assert_neg0(c.primaryKey, "store cursor primaryKey");
+  const x = s.index("x");
+  const xc = await req<IDBCursor>(x.openKeyCursor(0));
+  assert_neg0(xc.key, "index cursor key");
+  assert_neg0(xc.primaryKey, "index cursor primaryKey");
+  assert_neg0(await req(x.getKey(around0)), "index getKey");
+  assert_neg0((await req<unknown[]>(x.getAllKeys(around0)))[0], "index getAllKeys");
+  const ac = await req<IDBCursor>(x.openKeyCursor([0, "a"]));
+  assert_neg0((ac.key as unknown[])[0], "array index key");
+  assert_equals(ac.primaryKey, 1);
+  const mc = await req<IDBCursor>(s.index("m").openKeyCursor(0));
+  assert_neg0(mc.key, "multiEntry index key");
+  assert_neg0(mc.primaryKey, "multiEntry primaryKey");
+  const o = tx.objectStore("o");
+  // Not o.get([0, "a"]): Chromium's own IndexedDB sometimes finds no record there.
+  const ok = (await req<unknown[][]>(o.getAllKeys()))[0];
+  assert_neg0(ok[0], "array key");
+  assert_equals(ok[1], "a");
+  assert_neg0(env.KeyRange.only(-0).lower, "key range bound");
+});
+
+promise_test("keys: -0 and 0 are one key for put, add, delete and unique indexes", async (t, env) => {
+  const db = await openDb(t, env, (db) => db.createObjectStore("s").createIndex("u", "u", { unique: true }));
+  const tx = db.transaction("s", "readwrite");
+  const s = tx.objectStore("s");
+  assert_neg0(await req(s.put({ u: -0 }, -0)), "put's result");
+  assert_equals(await req(s.count(0)), 1);
+  await req(s.put({ u: 1 }, 0));
+  assert_equals(await req(s.count()), 1);
+  assert_true(Object.is((await req<unknown[]>(s.getAllKeys()))[0], 0), "a put under 0 replaces the record and its key");
+  await done(tx);
+  const tx2 = db.transaction("s", "readwrite");
+  const r = tx2.objectStore("s").add({ u: 2 }, -0);
+  assert_equals(await new Promise<string>((resolve) => (r.onerror = () => resolve(r.error!.name))), "ConstraintError", "add under -0");
+  await aborted(tx2);
+  const tx3 = db.transaction("s", "readwrite");
+  const s3 = tx3.objectStore("s");
+  s3.put({ u: -0 }, 5);
+  const r3 = s3.add({ u: 0 }, 6);
+  assert_equals(await new Promise<string>((resolve) => (r3.onerror = () => resolve(r3.error!.name))), "ConstraintError", "unique index");
+  await aborted(tx3);
+  const tx4 = db.transaction("s", "readwrite");
+  const s4 = tx4.objectStore("s");
+  s4.delete(-0);
+  assert_equals(await req(s4.count()), 0);
+  await done(tx4);
+});
+
 promise_test("keys: invalid keys throw DataError", async (t, env) => {
   await openDb(t, env, (db) => {
     const s = db.createObjectStore("s");
@@ -1587,6 +1655,41 @@ plateau_test("compact: drops deleted and replaced rows, keeps every answer, and 
   const db2 = await req<IDBDatabase>(env.factory.open(db.name));
   t.add_cleanup(() => db2.close());
   assert_equals(await req(db2.transaction("issues").objectStore("issues").count()), 30 + 3 * 20);
+}, { engine: true });
+
+plateau_test("keys: -0 keeps its spelling in a typed store, through an index added later, compaction and reopen", async (t, env) => {
+  const db1 = await openDb(t, env, (db) => {
+    db.createObjectStore("ty", { keyPath: "id", columns: { id: "f64", n: "f64" } } as IDBObjectStoreParameters).put({ id: -0, n: -0 });
+    const g = db.createObjectStore("g");
+    g.put({ x: -0 }, [-0, 1]);
+    g.put({ x: 2 }, 5);
+  });
+  const name = db1.name;
+  db1.close();
+  // A second upgrade adds an index, which moves the store's records to a new file.
+  const up = env.factory.open(name, 2);
+  up.onupgradeneeded = () => up.transaction!.objectStore("g").createIndex("x", "x");
+  const db = await req<IDBDatabase>(up);
+  await (db as unknown as { compact(): Promise<void> }).compact();
+  db.close();
+  const db2 = await req<IDBDatabase>(env.factory.open(name));
+  t.add_cleanup(() => db2.close());
+  const tx = db2.transaction(["ty", "g"]);
+  const ty = tx.objectStore("ty");
+  assert_neg0((await req<unknown[]>(ty.getAllKeys()))[0], "typed store key");
+  const v = await req<{ id: number; n: number }>(ty.get(0));
+  assert_neg0(v.id, "typed key field");
+  assert_neg0(v.n, "typed f64 field");
+  assert_neg0((await req<IDBCursor>(ty.openKeyCursor())).key, "typed cursor key");
+  assert_equals(await req(ty.count(0)), 1);
+  const g = tx.objectStore("g");
+  // Numbers sort before arrays: the key 5, then [-0, 1].
+  assert_neg0((await req<unknown[][]>(g.getAllKeys()))[1][0], "generic array key");
+  assert_same(await req(g.get([0, 1])), { x: -0 }, "an array key holding 0 finds the one stored with -0");
+  const xc = await req<IDBCursor>(g.index("x").openKeyCursor(0));
+  assert_neg0(xc.key, "index key from the later index");
+  assert_neg0((xc.primaryKey as unknown[])[0], "its primary key");
+  assert_same(await req(g.index("x").getAllKeys(2)), [5]);
 }, { engine: true });
 
 plateau_test("memory budget: a tiny budget drops loaded sections and every answer stays the same", async (t, env) => {

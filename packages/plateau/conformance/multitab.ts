@@ -1,17 +1,18 @@
 // Multi-tab tests: several pages of one origin in one browser context, each driving the same
 // database, run against native IndexedDB, plateau's API and plateau's API forced onto the
-// browser's IndexedDB (`fallback`) in Chromium and WebKit (headless, Playwright, persistent
+// browser's IndexedDB (`fallback`) in Chromium, WebKit and Firefox (headless, Playwright, persistent
 // profiles). Shared tests must pass on all three; plateau-only tests check what native IndexedDB
 // does not have: leader failover, whenLeader and observe.
 //
-//   bun conformance/multitab.ts [--browsers chromium,webkit] [--filter text] [--json out.json]
+//   bun conformance/multitab.ts [--browsers chromium,webkit,firefox] [--filter text] [--json out.json]
 // Exits non-zero if a test fails on plateau's API or a shared test's outcome differs from native.
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium, webkit, type BrowserContext, type BrowserType, type Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
+import { launchOptions, types } from "./browsers";
 import { createServer } from "vite";
 
 const argv = process.argv.slice(2);
@@ -19,10 +20,9 @@ const arg = (name: string, fallback: string) => {
   const i = argv.indexOf(`--${name}`);
   return i >= 0 ? argv[i + 1] : fallback;
 };
-const browsers = arg("browsers", "chromium,webkit").split(",").filter(Boolean);
+const browsers = arg("browsers", "chromium,webkit,firefox").split(",").filter(Boolean);
 const filter = arg("filter", "");
 const jsonOut = arg("json", "");
-const types: Record<string, BrowserType> = { chromium, webkit };
 
 type Impl = "native" | "plateau" | "fallback";
 
@@ -77,6 +77,21 @@ async function until(what: string, ok: () => Promise<boolean>, ms = 5000): Promi
 
 const has = (log: string[], line: string) => log.includes(line);
 
+/** Waits for `line` (a blocked event) in `page`'s log; whether it came. Firefox's own IndexedDB
+ * sometimes sends no blocked event while another tab keeps its connection open (natively 2 of 12
+ * runs of the deleteDatabase test, macOS 27.2, Firefox 159), though the open or delete still waits
+ * for that tab and goes on once it closes; there the outcome is noted, not asserted. */
+async function blockedIn(t: Ctx, page: Page, line: string, what: string): Promise<boolean> {
+  const seen = async () => has(await logOf(page), line);
+  if (t.browser !== "firefox") {
+    await until(what, seen);
+    return true;
+  }
+  await until(what, seen, 2000).catch(() => {});
+  t.note.blocked = await seen();
+  return t.note.blocked as boolean;
+}
+
 // Shared tests.
 
 test("a write in one tab is visible to reads in every other tab", async (t) => {
@@ -108,14 +123,14 @@ test("versionchange fires in every other tab, and blocked until the last connect
   await call(a, "open", "x", t.name, 1, { stores: ["s"] });
   await call(b, "open", "x", t.name, undefined, { stay: true });
   const upgraded = call(c, "open", "x", t.name, 2, { stores: ["s", "t"] });
-  await until("blocked in the upgrading tab", async () => has(await logOf(c), "x blocked 1->2"));
-  assert(has(await logOf(a), "x versionchange 1->2"), "versionchange in the first tab");
-  assert(has(await logOf(b), "x versionchange 1->2"), "versionchange in the tab that stays open");
+  const blocked = await blockedIn(t, c, "x blocked 1->2", "blocked in the upgrading tab");
+  await until("versionchange in the first tab", async () => has(await logOf(a), "x versionchange 1->2"), 1000);
+  await until("versionchange in the tab that stays open", async () => has(await logOf(b), "x versionchange 1->2"), 1000);
   await sleep(100);
   assert(!(await logOf(c)).some((l) => l.includes("upgradeneeded")), "no upgrade while a connection is open");
   await call(b, "close", "x");
   assertEq(await upgraded, { version: 2, stores: ["s", "t"] }, "the upgrade runs once the last connection closed");
-  assertEq(await logOf(c), ["x blocked 1->2", "x upgradeneeded 1->2", "x opened v2"], "events in the upgrading tab");
+  assertEq(await logOf(c), [...(blocked ? ["x blocked 1->2"] : []), "x upgradeneeded 1->2", "x opened v2"], "events in the upgrading tab");
 });
 
 test("no blocked event when every other tab closes on versionchange", async (t) => {
@@ -133,9 +148,9 @@ test("deleteDatabase in one tab fires versionchange to null in the others and wa
   await call(a, "put", "x", "s", [[1, "one"]]);
   await call(c, "open", "x", t.name, undefined, { stay: true });
   const deleted = call(b, "deleteDatabase", "d", t.name);
-  await until("blocked in the deleting tab", async () => has(await logOf(b), "d blocked 1->null"));
-  assert(has(await logOf(a), "x versionchange 1->null"), "versionchange to null in the first tab");
-  assert(has(await logOf(c), "x versionchange 1->null"), "versionchange to null in the tab that stays open");
+  await blockedIn(t, b, "d blocked 1->null", "blocked in the deleting tab");
+  await until("versionchange to null in the first tab", async () => has(await logOf(a), "x versionchange 1->null"), 1000);
+  await until("versionchange to null in the tab that stays open", async () => has(await logOf(c), "x versionchange 1->null"), 1000);
   await call(c, "close", "x");
   await deleted;
   await call(a, "open", "y", t.name, 1, { stores: ["s"] });
@@ -319,7 +334,7 @@ for (const b of browsers) {
   for (const impl of ["native", "plateau", "fallback"] as Impl[]) {
     const results: Result[] = [];
     const profile = await mkdtemp(join(tmpdir(), "plateau-multitab-"));
-    const ctx = await types[b].launchPersistentContext(profile, { headless: true });
+    const ctx = await types[b].launchPersistentContext(profile, { ...(await launchOptions(b)), headless: true });
     const errors: string[] = [];
     for (const { name, scope, body } of tests) {
       if (filter && !name.includes(filter)) continue;

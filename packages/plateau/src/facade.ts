@@ -25,6 +25,7 @@ import {
   normalizeKeyPath,
   PlateauKeyRange,
   requireKey,
+  spelledKey,
   toRange,
   validKeyPath,
   type Key,
@@ -904,7 +905,7 @@ export class PlateauTransaction extends PlateauTarget {
         result = req.cursor!._land(v as CursorHit | null);
         break;
       case "records":
-        result = (v as CursorHit[]).map((x) => ({ key: decodeKey(x.k), primaryKey: decodeKey(x.p), value: x.v }));
+        result = (v as CursorHit[]).map((x) => ({ key: decodeKey(x.sk ?? x.k), primaryKey: decodeKey(x.sp ?? x.p), value: x.v }));
         break;
       case "query":
         req.plan = (v as { plan: string }).plan;
@@ -1068,7 +1069,11 @@ export class PlateauObjectStore {
     if (inline && keyGiven) throw dataError("The object store uses in-line keys and the key parameter was provided.");
     if (!inline && !def.autoIncrement && !keyGiven) throw dataError("The object store uses out-of-line keys and has no key generator and the key parameter was not provided.");
     let k: string | undefined;
-    if (keyGiven) k = requireKey(key);
+    let sk: string | undefined;
+    if (keyGiven) {
+      k = requireKey(key);
+      sk = spelledKey(key);
+    }
     if (def.columns) {
       const [t, rest, pk] = splitTyped(def, value);
       if (pk === undefined && !def.autoIncrement) throw dataError("The record has no number at the key path.");
@@ -1086,10 +1091,14 @@ export class PlateauObjectStore {
         if (r === "missing") {
           if (!def.autoIncrement) throw dataError("Evaluating the object store's key path did not yield a value.");
           if (!canInjectKey(value, def.keyPath as string)) throw dataError("A generated key could not be inserted into the value.");
-        } else k = r.key;
+        } else {
+          k = r.key;
+          sk = r.sk;
+        }
       }
     }
     if (k !== undefined) row.k = k;
+    if (sk !== undefined) row.sk = sk;
     const req = new PlateauRequest(source ?? this, this._tx, "key");
     this._tx._issuePut(def.name, row, req);
     return req;
@@ -1518,8 +1527,8 @@ export class PlateauCursor {
       return null;
     }
     this.at = [hit.k, hit.p];
-    this.keyValue = decodeKey(hit.k);
-    this.pkValue = hit.k === hit.p ? this.keyValue : decodeKey(hit.p);
+    this.keyValue = decodeKey(hit.sk ?? hit.k);
+    this.pkValue = hit.k === hit.p && hit.sk === hit.sp ? this.keyValue : decodeKey(hit.sp ?? hit.p);
     this._value = hit.v;
     this.gotValue = true;
     return this;

@@ -6,7 +6,7 @@ It keeps a compressed bitmap of row ids for each value of a field you declare, s
 filters on several fields (`team = 7 AND state IN (1, 2) ORDER BY updatedAt DESC LIMIT 50`) costs
 roughly the size of its result, not the size of the table.
 
-Status: 0.2.0, pre-1.0. Read [Known limits](#known-limits) before you put data in it that you
+Status: 0.3.0, pre-1.0. Read [Known limits](#known-limits) before you put data in it that you
 cannot rebuild.
 
 ## Install
@@ -122,7 +122,7 @@ with a connection, as they do natively.
 When the leader tab closes, the next tab takes over and reconnects the others. Transactions the
 old leader was running for other tabs abort with `UnknownError`; whatever they committed is on
 disk. In the bundled live-sync example the new leader was streaming again 10-16 ms after the old
-one closed (Chromium and WebKit).
+one closed (Chromium and WebKit; 13-18 ms in Firefox's multi-tab tests).
 
 plateau adds two calls for multi-tab apps:
 
@@ -193,24 +193,38 @@ so `memoryStats` reports the peak.
 
 ## Browser support
 
-Measured with Playwright on macOS: Chromium 158 and WebKit 27.2. Firefox is not measured
-(Playwright's Firefox did not launch on the test machine), so treat it as unknown.
+Measured with Playwright on macOS 27.2: Chromium 158, WebKit 27.2 and Firefox 159. In all three
+the engine runs on OPFS and passes 87 of 87 conformance tests and the multi-tab tests; the packed
+package works in a fresh Vite app in a persistent profile and in a Playwright ephemeral context.
 
 plateau's engine needs OPFS with `FileSystemSyncAccessHandle` in a dedicated worker, module
 workers, and WebAssembly SIMD (Chrome 91+, Safari 16.4+, Firefox 89+ ship SIMD). Elsewhere it runs
 on the browser's IndexedDB (see [the fallback](#where-plateau-cannot-run-the-indexeddb-fallback)).
 
 In a WebKit ephemeral session (Playwright's default, non-persistent context) OPFS is not available,
-so plateau runs on the fallback; with a persistent profile it runs on OPFS. Measured with
-Playwright: on the fallback, 85 of 85 conformance tests pass in Chromium and WebKit, with OPFS,
-`Worker` or WebAssembly removed, the WASM failing to compile, the worker failing to load, and in a
-WebKit ephemeral context. Private browsing modes are not measured.
+so plateau runs on the fallback; with a persistent profile it runs on OPFS. Firefox's ephemeral
+context runs on OPFS. Measured with Playwright: on the fallback, conformance matches the browser's
+own IndexedDB (87 of 87 in Chromium and WebKit, 84 of 87 in Firefox) with OPFS, `Worker` or
+WebAssembly removed, the WASM failing to compile, the worker failing to load, and in a WebKit
+ephemeral context. Private browsing modes are not measured.
+
+Firefox's own IndexedDB differs in two places that the fallback, being Firefox's IndexedDB, keeps:
+
+- a key stored as `-0` comes back as `0` (the three `-0` conformance tests);
+- an open or `deleteDatabase` that another tab's connection holds up sometimes gets no `blocked`
+  event, though it still waits and goes on once that tab closes (natively in 2 of 12 runs of one
+  multi-tab test).
+
+On OPFS, plateau keeps `-0` and fires `blocked` in Firefox too.
 
 ## Known limits
 
-- **Conformance: 84 of 85** WPT-style IndexedDB tests pass in Chromium and WebKit on OPFS, against
-  85 of 85 for native IndexedDB. The one difference: a key stored as `-0` comes back as `0`. On the
-  IndexedDB fallback all 85 pass.
+- **Conformance:** 87 of 87 WPT-style IndexedDB tests pass on OPFS in Chromium, WebKit and
+  Firefox, as they do on native IndexedDB in Chromium and WebKit (Firefox's own passes 84, see
+  [Browser support](#browser-support)). Since 0.3.0 a key stored as `-0` comes back as `-0`; keys
+  written by 0.2.0 or earlier stored `-0` as `0` and still read as `0`.
+- **No downgrade:** once 0.3.0 stores a `-0` key in a store, 0.2.0 fails to read that store
+  (`UnknownError`).
 - **The fallback's data is separate** from OPFS data, and its `store.query` scans the store (see
   [the fallback](#where-plateau-cannot-run-the-indexeddb-fallback)).
 - **First open:** the page's first call waits for the worker to check that it can open an OPFS

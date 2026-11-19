@@ -45,7 +45,8 @@ than IndexedDB on multi-key queries except one (WebKit Q3, 2.5x), short of the 1
 Chromium and WebKit. SQLite-WASM with matching indexes lands within 2x of plateau on the ordered
 and count queries (Q1, Q3) in both browsers. plateau's clear wins are 1,000 point gets (4-5x over
 SQLite), the multi-filter query (2-4x over SQLite) and bulk load. Firefox did not start under
-Playwright on macOS 27.2 and is not measured. Numbers and caveats: `results/index.html`.
+Playwright on macOS 27.2 and is not measured (from plateaudb 0.3.0 it starts and is tested, see
+`packages/plateau/README.md`). Numbers and caveats: `results/index.html`.
 
 Not yet at M0: durability (M1), the IndexedDB facade (M2), the planner with statistics (M3),
 multi-tab (M4).
